@@ -9,3 +9,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
+
+def main():
+    print("Initializing Data Mining Pipeline...")
+    
+if __name__ == "__main__":
+    main()
