@@ -4,6 +4,7 @@ Predict football match outcomes using XGBoost and Random Forest.
 
 import pandas as pd
 import numpy as np
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
@@ -15,8 +16,8 @@ def preprocess_data(matches, countries):
     print("Loading dataset...")
     
     # Load matches and countries data into DataFrames
-    df_matches = pd.DataFrame(matches)
-    df_countries = pd.DataFrame(countries)
+    df_matches = pd.read_csv(matches)
+    df_countries = pd.read_csv(countries)
     
     print("Cleaning data...")
     
@@ -57,7 +58,11 @@ def preprocess_data(matches, countries):
     
     # Select features and target variable
     features = [
-        'home_team_encoded', 'away_team_encoded', 'tournament_encoded', 'is_friendly', 'is_neutral'
+        'home_team_encoded', 
+        'away_team_encoded', 
+        'tournament_encoded', 
+        'is_friendly', 
+        'is_neutral'
     ]
     
     X = df_matches[features]
@@ -65,9 +70,56 @@ def preprocess_data(matches, countries):
     
     return X, y
 
+def train_models(X, y):
+    # Splitting the data into training and testing sets, with 80% for training and 20% (0.2) for testing
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 42)
+    
+    # Training Random Forest Classifier
+    print("Training Random Forrest Classifier...")
+    
+    rf_model = RandomForestClassifier(
+        n_estimators = 100, 
+        max_depth = 10, 
+        random_state = 42
+    )
+    
+    rf_model.fit(X_train, y_train)
+    rf_predictions = rf_model.predict(X_test)
+    
+    # Training XGBoost Classifier
+    print("Training XGBoost Classifier...")
+    
+    xgb_model = XGBClassifier(
+        n_estimators = 100,
+        max_depth = 6,
+        learning_rate = 0.1,
+        random_state = 42,
+        eval_metric = 'mlogloss'
+    )
+    
+    xgb_model.fit(X_train, y_train)
+    xgb_predictions = xgb_model.predict(X_test)
+    
+    os.makedirs('results', exist_ok=True)
+
+    # Save the results to a text file
+    with open('results/model_performance.txt', 'w') as f:
+        f.write("Random Forest Classifier Performance:\n")
+        f.write(f"Accuracy: {accuracy_score(y_test, rf_predictions):.4f}\n")
+        f.write("Classification Report:\n")
+        f.write(str(classification_report(y_test, rf_predictions, target_names=['Away Win', 'Draw', 'Home Win'])))
+        
+        f.write("\n\nXGBoost Classifier Performance:\n")
+        f.write(f"Accuracy: {accuracy_score(y_test, xgb_predictions):.4f}\n")
+        f.write("Classification Report:\n")
+        f.write(str(classification_report(y_test, xgb_predictions, target_names=['Away Win', 'Draw', 'Home Win'])))
+        
+    print("Model training and evaluation completed. Results saved to results/model_performance.txt")
+
 def main():
     print("Initializing...")
     X, y = preprocess_data('dataset/all_matches.csv', 'dataset/countries_names.csv')
+    train_models(X, y)
     
 if __name__ == "__main__":
     main()
