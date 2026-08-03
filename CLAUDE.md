@@ -14,9 +14,13 @@ The decisions below are settled — follow them rather than re-deriving.
 - `api.py` — FastAPI, `GET /api/teams` and `POST /api/predict`.
 - `prototype.html` — approved layout, built by `scratchpad/build_mockup.py`. Port markup/CSS from here.
 - `predict_matches.py` — benchmark only, not the serving path. Chronological split.
+- `web/` — Vite + React + TS. `prototype.html` ported into `TeamPicker`,
+  `OutcomeBar`, `ScoreGrid`, `Markets`, `H2H`, `Form`. Vite proxies `/api` to
+  port 8000, so the app never hardcodes a host. The grid-windowing maths lives in
+  `web/src/grid.ts` (not the `.tsx`) so `node --test` can run it without a
+  framework.
 
-**Next: `web/`** — Vite + React + TS, porting `prototype.html` into components:
-`TeamPicker`, `OutcomeBar`, `ScoreGrid`, `Markets`, `H2H`, `Form`.
+**Next: Elo or rolling-form features** — see Deferred below.
 
 ## Locked decisions
 
@@ -58,7 +62,10 @@ square covering 95% of the mass — lopsided fixtures peak well outside 0–5.
   hosts, so `<link>` to Google Fonts or the Font Awesome CDN silently falls back.
   In `prototype.html` they are inlined as base64 `@font-face` data URIs; Font
   Awesome is subsetted with `pyftsubset` to the glyphs used (204 KB → 1.4 KB).
-  In `web/`, use the `@fontsource/roboto` and `@fortawesome` npm packages.
+  In `web/` they come from `@fontsource-variable/roboto`,
+  `@fontsource-variable/roboto-mono` (families `Roboto Variable` /
+  `Roboto Mono Variable`) and `@fortawesome/fontawesome-free`, all bundled by
+  Vite. Only Font Awesome's `solid` stylesheet is imported.
 - **Both themes.** Tokens on `:root`, redefined under
   `@media (prefers-color-scheme: dark)` and both `:root[data-theme="..."]` blocks.
 
@@ -79,9 +86,12 @@ scope — this dataset is internationals only.
 .env/bin/python test_model.py          # model sanity checks
 .env/bin/uvicorn api:app --reload --port 8000
 .env/bin/python predict_matches.py     # benchmark, writes results/
+npm --prefix web run dev               # front end on :5173, needs the API up
+npm --prefix web test                  # grid-window checks, node --test
+npm --prefix web run build             # tsc -b && vite build
 ```
 
-Virtualenv is `.env/` (not `.venv/`).
+Virtualenv is `.env/` (not `.venv/`). `.claude/launch.json` holds both servers.
 
 ## Deferred, in priority order
 

@@ -209,3 +209,6 @@ __marimo__/
 results/
 # macOS
 .DS_Store
+
+# Node (web/). dist/ is already covered by the Python section above.
+node_modules/
