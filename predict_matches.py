@@ -1,11 +1,14 @@
 """
-Predict football match outcomes using XGBoost and Random Forest.
+Benchmark script: XGBoost and Random Forest on team/tournament identity alone.
+
+This is not what the app serves -- see model.py, which blends a Poisson goal
+model with XGBoost and scores better. Keep this around to document the baseline
+those numbers are measured against.
 """
 
 import pandas as pd
 import numpy as np
 import os
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import LabelEncoder
@@ -28,6 +31,9 @@ def preprocess_data(matches, countries):
     # Also converting the date column to datetime format for easier filtering
     df_matches['date'] = pd.to_datetime(df_matches['date'])
     df_matches = df_matches[df_matches['date'].dt.year >= 2000].copy()
+
+    # Sorted by date so train_models can cut chronologically rather than shuffling.
+    df_matches = df_matches.sort_values('date').reset_index(drop=True)
     
     # Standardize country names in matches dataset using the mapping from countries dataset
     country_map = dict(zip(df_countries['original_name'], df_countries['current_name']))
@@ -71,8 +77,12 @@ def preprocess_data(matches, countries):
     return X, y
 
 def train_models(X, y):
-    # Splitting the data into training and testing sets, with 80% for training and 20% (0.2) for testing
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 42)
+    # Chronological 80/20 cut, not a random shuffle. Forecasting is a forward-in-time
+    # job, so the test set has to sit entirely after the training set -- a shuffled
+    # split lets 2020 matches inform a prediction about a 2004 one.
+    cut = int(len(X) * 0.8)
+    X_train, X_test = X[:cut], X[cut:]
+    y_train, y_test = y[:cut], y[cut:]
     
     # Training Random Forest Classifier
     print("Training Random Forrest Classifier...")
