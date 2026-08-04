@@ -1,3 +1,5 @@
+import { Flag } from './Flag'
+
 type Props = {
   id: string
   label: string
@@ -8,8 +10,7 @@ type Props = {
 
 /**
  * Native <datalist> does the filtering over 237 teams, so no combobox library.
- * The swatch is the team's real flag colour and is identity only -- data
- * encoding uses the --home / --away tokens.
+ * The flag is identity only -- data encoding uses the --home / --away tokens.
  */
 export function TeamPicker({ id, label, value, colour, onChange }: Props) {
   return (
@@ -18,7 +19,7 @@ export function TeamPicker({ id, label, value, colour, onChange }: Props) {
         {label}
       </label>
       <div className="inputrow">
-        <i className="swatch" style={{ background: colour }} />
+        <Flag team={value} colour={colour} />
         <input
           id={id}
           list="teams"

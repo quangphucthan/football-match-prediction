@@ -11,6 +11,10 @@ import '@fontsource-variable/roboto'
 import '@fontsource-variable/roboto-mono'
 import '@fortawesome/fontawesome-free/css/fontawesome.css'
 import '@fortawesome/fontawesome-free/css/solid.css'
+// ponytail: this 28 KB stylesheet names every flag, so Vite emits all ~540 SVGs
+// into dist. Only the two on screen are ever fetched. Narrow it if dist size
+// ever matters -- transfer size is already fine.
+import 'flag-icons/css/flag-icons.min.css'
 import './styles.css'
 
 import App from './App.tsx'

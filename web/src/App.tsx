@@ -23,6 +23,7 @@ export default function App() {
   const [tournament, setTournament] = useState('Friendly')
 
   const team = (name: string) => teams.find((t) => t.name === name)
+  const colour = (name: string) => team(name)?.color ?? 'var(--ink-faint)'
   // Only send names that exist, so half-typed input never becomes a 422.
   const known = (name: string) => (team(name) ? name : '')
   const { data, loading, error } = usePrediction(known(home), known(away), neutral, tournament)
@@ -50,7 +51,7 @@ export default function App() {
             id="home"
             label="Home"
             value={home}
-            colour={team(home)?.color ?? 'var(--ink-faint)'}
+            colour={colour(home)}
             onChange={setHome}
           />
           <button
@@ -68,7 +69,7 @@ export default function App() {
             id="away"
             label="Away"
             value={away}
-            colour={team(away)?.color ?? 'var(--ink-faint)'}
+            colour={colour(away)}
             onChange={setAway}
           />
         </div>
@@ -124,6 +125,8 @@ export default function App() {
             expected={data.expected_goals}
             home={data.home}
             away={data.away}
+            homeColour={colour(data.home)}
+            awayColour={colour(data.away)}
           />
           <div className="panels">
             <ScoreGrid grid={data.grid} home={data.home} away={data.away} />

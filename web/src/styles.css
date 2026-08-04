@@ -80,9 +80,14 @@ label.cap { font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; co
 .inputrow { display:flex; align-items:center; gap:9px; background:var(--inset);
             border:1px solid var(--rule); border-radius:3px; padding:0 10px; }
 .inputrow:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-bg); }
-/* Bordered so pure-white and pure-black flag colours still read as a swatch. */
-.swatch { width:11px; height:18px; border-radius:1px; flex:none; background:var(--ink-faint);
-          border:1px solid var(--rule); transition:background .18s ease; }
+/* Holds either a flag-icons background-image or, when no flag exists for that
+   side, the team's colour. 4x3 to match the flag artwork. Bordered so both
+   pure-white flags and pure-white fallback colours still read as a box. */
+/* background-color, never the `background` shorthand: the shorthand resets
+   background-image and would wipe out the flag this class is layered onto. */
+.swatch { width:18px; height:13px; border-radius:1px; flex:none; background-color:var(--ink-faint);
+          background-size:cover; background-position:50%; background-repeat:no-repeat;
+          border:1px solid var(--rule); transition:background-color .18s ease; }
 .inputrow input { flex:1; min-width:0; background:none; border:none; outline:none; color:var(--ink);
                   font:inherit; font-size:15px; padding:9px 0; }
 .masthead h1 .mark { color:var(--accent); font-size:16px; margin-right:2px; }
@@ -122,7 +127,10 @@ select:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .odds .pct { font-size:34px; font-weight:600; letter-spacing:-.03em; line-height:1.05;
              font-variant-numeric:tabular-nums; font-family:var(--font-mono); }
 .odds .who { font-size:11px; letter-spacing:.11em; text-transform:uppercase; color:var(--ink-faint);
-             margin-top:3px; font-family:var(--font-mono); }
+             margin-top:3px; font-family:var(--font-mono);
+             display:flex; align-items:center; justify-content:center; gap:6px; }
+/* Same bordered swatch as the picker, scaled to the label. */
+.odds .who .swatch { width:12px; height:9px; }
 .odds .home .pct { color:var(--home); }
 .odds .away .pct { color:var(--away); }
 
