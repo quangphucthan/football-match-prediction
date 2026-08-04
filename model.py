@@ -192,10 +192,13 @@ class Model:
         # venue toggle move the wrong way. Venue is handled by the Poisson `home`
         # term instead, which is fit only on the non-neutral contrast and is immune.
         # Costs ~0.043 log loss on the backtest; the backtest shares the artifact.
+        # np.asarray is for the type checker, not the runtime: LabelEncoder carries
+        # no annotations, so the stubs widen transform() to numpy's ArrayLike, which
+        # pandas will not take. It is already an ndarray.
         return pd.DataFrame({
-            "home_team": self._team_enc.transform(df["home_team"]),
-            "away_team": self._team_enc.transform(df["away_team"]),
-            "tournament": self._trn_enc.transform(df["tournament"]),
+            "home_team": np.asarray(self._team_enc.transform(df["home_team"])),
+            "away_team": np.asarray(self._team_enc.transform(df["away_team"])),
+            "tournament": np.asarray(self._trn_enc.transform(df["tournament"])),
             "is_friendly": (df["tournament"] == "Friendly").astype(int).values,
         })
 

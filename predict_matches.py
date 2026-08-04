@@ -51,12 +51,17 @@ def preprocess_data(matches, countries):
     all_teams = pd.concat([df_matches['home_team'], df_matches['away_team']]).unique()
     le_team.fit(all_teams)
 
-    df_matches['home_team_encoded'] = pd.Series(le_team.transform(df_matches['home_team']), index=df_matches.index)
-    df_matches['away_team_encoded'] = pd.Series(le_team.transform(df_matches['away_team']), index=df_matches.index)
-    
+    # np.asarray keeps the type checker happy: LabelEncoder is unannotated, so the
+    # stubs give transform() numpy's very broad ArrayLike -- which admits Buffer and
+    # str -- and pandas rejects that. This narrows it to the ndarray it already is.
+    # The rows were reindexed above, so assigning the array positionally is the same
+    # as the pd.Series(..., index=...) wrapper this replaces.
+    df_matches['home_team_encoded'] = np.asarray(le_team.transform(df_matches['home_team']))
+    df_matches['away_team_encoded'] = np.asarray(le_team.transform(df_matches['away_team']))
+
     # Change tournament name as string to numerical values
     le_tournament = LabelEncoder()
-    df_matches['tournament_encoded'] = pd.Series(le_tournament.fit_transform(df_matches['tournament']), index=df_matches.index)
+    df_matches['tournament_encoded'] = np.asarray(le_tournament.fit_transform(df_matches['tournament']))
     
     # Create features for whether the match was a friendly or played on neutral venue
     df_matches['is_friendly'] = (df_matches['tournament'] == 'Friendly').astype(int)
