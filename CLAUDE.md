@@ -53,6 +53,27 @@ Islands, Sint Eustatius and five historical sides) fall back to the bordered
 colour swatch, which is what `Flag.tsx` handles. `gb-eng` / `gb-sct` / `gb-wls` /
 `gb-nir` mean the home nations get their own flags rather than the Union Jack.
 
+**Home advantage is per team, and it buys no accuracy.** The Poisson carries a
+global `home` term plus a one-hot `home_team` block, so each side deviates from
+the average instead of sharing one number. Measured on the chronological split:
+global-only 0.8363 / 0.6307, per-team 0.8361 / 0.6309 — a paired improvement of
++0.0002 ± 0.0011, better on 49.5% of matches. **It is a modelling fix, not an
+accuracy win; do not cite it as one.** It is kept because a single multiplier
+for both Bolivia and Tonga is wrong on its face, and because
+`home_advantage(team)` is now a real number the UI could show.
+
+`HOME_BLOCK_SCALE = 0.4` is what makes it defensible. `PoissonRegressor` takes
+one alpha for every coefficient, so the block is scaled to shrink it separately
+(effect ∝ 1/s, penalty ∝ 1/s²). Unshrunk, Tonga scored 0.54× off five home
+matches — worse at home — and the block spanned 0.54–2.31 for no metric gain.
+
+As shipped (fit on all data) the range is **0.86–2.12, median 1.25 against a
+global term of 1.249**, with only 6 of 237 teams below 1.0. The top is the
+sanity check that matters: Bolivia 2.12, Guatemala 1.67, Ecuador 1.57, Chile
+1.56 — altitude and travel, not noise. Small-sample sides sit on the global
+term (Tonga, 7 home matches, 0.97). `check_home_advantage_is_per_team` in
+`test_model.py` guards the range, the median, and Bolivia's place at the top.
+
 **λ is capped at 6.0.** Multiplicative Poisson explodes on extreme mismatches
 (Brazil v San Marino solved to 10.6 expected goals). Costs zero measured log loss.
 
@@ -116,6 +137,19 @@ Virtualenv is `.env/` (not `.venv/`). `.claude/launch.json` holds both servers.
 
 1. **Elo or rolling-form features** — the biggest accuracy win still available,
    ~20 lines, feeds both models.
-2. Model persistence via joblib — currently fits on first request (~5s).
-3. URL search params for shareable predictions (needs a router).
-4. Club/league support — blocked on a dataset.
+2. **Venue, in two steps — only the first is possible with this data.**
+   - *Host country.* `all_matches.csv` carries a `country` column, where the
+     match was actually played, and no feature uses it. That would turn the
+     venue control from a neutral checkbox into a host picker and let the model
+     separate a true neutral from a fixture in the away side's region. Not
+     blocked on anything; do it after Elo.
+   - *Specific stadium.* Goal rates genuinely do move by ground — altitude at La
+     Paz, pitch size, surface, crowd — so a stadium picker would change the
+     numbers, not just the label. **Blocked: there is no stadium or venue column
+     in this dataset**, only the host country, and international results feeds
+     generally do not carry per-ground detail. Sourcing a fixture-level venue
+     feed is the prerequisite, the same blocker as club/league support. Do not
+     build a stadium dropdown that does not move the prediction.
+3. Model persistence via joblib — currently fits on first request (~2s measured).
+4. URL search params for shareable predictions (needs a router).
+5. Club/league support — blocked on a dataset.

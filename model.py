@@ -51,6 +51,19 @@ BLEND_FLOOR = 1e-4     # keeps log(0) out of the pool
 # team-strength prior replaces the raw one-hot ratings.
 LAMBDA_CAP = 6.0
 
+# One-hot level for "this row is not the home side", so the per-team home block
+# only ever fires on actual home rows.
+NOT_HOME = "(not home)"
+
+# Shrinkage on the per-team home block. PoissonRegressor takes a single alpha
+# for every coefficient, so the block is scaled instead: at scale s the same
+# effect needs a coefficient 1/s as large, which L2 penalises 1/s^2 harder.
+# Measured on the chronological split -- 1.0 gave Tonga a 0.54x home advantage
+# off five home matches, 0.4 pulls that to 1.04x and holds Bolivia at 1.97x,
+# for identical log loss (0.8361 vs 0.8360). Tuned for sane coefficients, not
+# for the metric, which cannot separate them.
+HOME_BLOCK_SCALE = 0.4
+
 XGB_PARAMS = dict(
     n_estimators=100, max_depth=6, learning_rate=0.1,
     random_state=42, eval_metric="mlogloss",
@@ -142,10 +155,36 @@ class Model:
         )
 
     def _poisson_features(self, long, fit=False):
-        cats = long[["team", "opp"]]
+        # Home advantage is per team, not one number for everybody: altitude,
+        # travel and crowd are not shared evenly. The plain `home` column keeps
+        # carrying the average effect and the one-hot `home_team` block carries
+        # each side's deviation from it, so L2 pulls a team with few home
+        # matches back toward the global term instead of inventing an edge for
+        # it. Sides that are never the home team collapse into NOT_HOME.
+        cats = pd.DataFrame({
+            "team": long["team"],
+            "opp": long["opp"],
+            "home_team": np.where(long["home"] > 0, long["team"], NOT_HOME),
+        })
         encoded = self._ohe.fit_transform(cats) if fit else self._ohe.transform(cats)
+        # Shrink the home_team block, which sits after the team and opp blocks.
+        split = len(self._ohe.categories_[0]) + len(self._ohe.categories_[1])
+        encoded = encoded.tocsc()
+        encoded = sparse.hstack([encoded[:, :split], encoded[:, split:] * HOME_BLOCK_SCALE])
         home = sparse.csr_matrix(long[["home"]].values.astype(float))
         return sparse.hstack([encoded, home]).tocsr()
+
+    def home_advantage(self, team):
+        """What playing at home multiplies this team's expected goals by.
+
+        The global term times the team's own deviation. Bolivia comes out near
+        2x (altitude); most sides land between 1.0 and 1.3.
+        """
+        names = self._ohe.get_feature_names_out(["team", "opp", "home_team"])
+        idx = {n: i for i, n in enumerate(names)}
+        key = f"home_team_{team}"
+        own = HOME_BLOCK_SCALE * self._poisson.coef_[idx[key]] if key in idx else 0.0
+        return float(np.exp(self._poisson.coef_[-1] + own))
 
     # -- prediction ------------------------------------------------------------
 

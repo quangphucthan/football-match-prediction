@@ -68,6 +68,35 @@ def check_home_advantage(m):
     assert at_home > on_neutral, f"home venue must help: {at_home} vs neutral {on_neutral}"
 
 
+def check_home_advantage_is_per_team(m):
+    """Guards HOME_BLOCK_SCALE: unshrunk, teams with five home matches went wild.
+
+    At scale 1.0 Tonga came out at 0.54x -- i.e. actively worse at home -- off
+    five home matches, and the block spanned 0.54-2.31. Shrinkage is what keeps
+    the range defensible while leaving Bolivia's altitude edge intact.
+
+    The 0.8 floor is deliberately below the current worst (Sint Maarten 0.86,
+    nine home matches). Being mildly worse at home is noise in a 237-team tail;
+    0.54 was not.
+    """
+    adv = {t: m.home_advantage(t) for t in m.teams}
+    values = np.array(list(adv.values()))
+    globally = float(np.exp(m._poisson.coef_[-1]))
+
+    for team, v in adv.items():
+        assert 0.8 <= v <= 2.5, f"{team} home advantage {v:.2f} is out of range"
+
+    # Shrinkage pulls the typical team onto the global term. If this drifts, the
+    # per-team block has started explaining things the global one should.
+    assert abs(np.median(values) - globally) < 0.05 * globally, (
+        f"median {np.median(values):.2f} should sit on the global term {globally:.2f}"
+    )
+
+    # Altitude is the effect most obviously real, so it is the one to insist on.
+    assert adv["Bolivia"] > 1.5, f"altitude should show up: Bolivia {adv['Bolivia']:.2f}"
+    assert adv["Bolivia"] >= values.max(), f"Bolivia should top the table, got {adv['Bolivia']:.2f}"
+
+
 def check_input_validation(m):
     for args, expected in [
         (("Atlantis", "France"), "unknown team"),
@@ -147,7 +176,8 @@ def main():
     checks = [
         check_probabilities_are_coherent, check_grid_matches_headline,
         check_expected_goals_are_plausible, check_lopsided_fixtures,
-        check_home_advantage, check_input_validation, check_history,
+        check_home_advantage, check_home_advantage_is_per_team,
+        check_input_validation, check_history,
     ]
     for fn in checks:
         fn(m)
