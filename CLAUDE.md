@@ -12,7 +12,9 @@ The decisions below are settled — follow them rather than re-deriving.
 - `model.py` — the served model. `get_model().predict(home, away, neutral, tournament)` returns the whole API payload.
 - `test_model.py` — assert-based checks, no framework. Run before touching model maths.
 - `api.py` — FastAPI, `GET /api/teams` and `POST /api/predict`.
-- `prototype.html` — approved layout, built by `scratchpad/build_mockup.py`. Port markup/CSS from here.
+- `prototype.html` — approved layout, built by `tools/build_mockup.py` (which
+  writes `tools/mockup.html`; copy it over). Regenerating reproduces the
+  committed file byte for byte. Port markup/CSS from here.
 - `predict_matches.py` — benchmark only, not the serving path. Chronological split.
 - `web/` — Vite + React + TS. `prototype.html` ported into `TeamPicker`,
   `OutcomeBar`, `ScoreGrid`, `Markets`, `H2H`, `Form`. Vite proxies `/api` to
