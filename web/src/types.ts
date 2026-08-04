@@ -6,7 +6,9 @@
  */
 
 export type Team = { name: string; color: string; played: number }
-export type TeamsResponse = { teams: Team[]; tournaments: string[] }
+/** One <optgroup>: a confederation (or Friendly/World), tournaments A-Z inside. */
+export type TournamentGroup = { region: string; tournaments: string[] }
+export type TeamsResponse = { teams: Team[]; tournaments: TournamentGroup[] }
 
 export type Outcome = { home: number; draw: number; away: number }
 export type Scoreline = { score: string; p: number }

@@ -68,8 +68,12 @@ export default function App() {
             value={tournament}
             onChange={(e) => setTournament(e.target.value)}
           >
-            {tournaments.map((t) => (
-              <option key={t}>{t}</option>
+            {tournaments.map((g) => (
+              <optgroup key={g.region} label={g.region}>
+                {g.tournaments.map((t) => (
+                  <option key={t}>{t}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <label className="toggle">

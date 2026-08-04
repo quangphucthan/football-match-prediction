@@ -26,6 +26,7 @@ grid comes from it, rescaled so its win/draw/loss margins match the blend. That
 keeps every number on screen derived from one consistent object.
 """
 
+import unicodedata
 from functools import lru_cache
 
 import numpy as np
@@ -63,6 +64,61 @@ NOT_HOME = "(not home)"
 # for identical log loss (0.8361 vs 0.8360). Tuned for sane coefficients, not
 # for the metric, which cannot separate them.
 HOME_BLOCK_SCALE = 0.4
+
+# Competition dropdown grouping. Friendly first because it is the default and a
+# third of the dataset, then World, then the confederations alphabetically.
+REGION_ORDER = (
+    "Friendly", "World", "Africa", "Asia", "Europe",
+    "North & Central America", "Oceania", "South America",
+)
+
+# Checked against who actually played in them, not guessed from the name: these
+# span confederations (French Territory Cup is Martinique to Tahiti, Island
+# Games is Bermuda to Greenland, Millenium Cup put Bosnia against India) or are
+# invitationals rather than competitions (US Cup).
+TOURNAMENT_REGION_OVERRIDES = {
+    "French Territory Cup": "World",
+    "Island Games": "World",
+    "Islamic Games": "World",
+    "Millenium Cup": "World",
+    "US Cup": "Friendly",
+}
+
+# First matching keyword wins, so order matters. The cross-confederation block
+# has to precede the continental ones -- "Afro-Asian Games" must not be caught
+# by "asian" -- and plain "world cup" has to come last, so that the combined
+# qualifiers ("World Cup and African Cup qual", "WC q and Oce Cup") group under
+# the confederation that actually plays them.
+TOURNAMENT_REGIONS = (
+    ("World", ("afro-asian", "afc-ofc", "intercontinental", "confederations", "fifa series")),
+    ("Friendly", ("friendly", "independence")),
+    ("Europe", ("european", "baltic", "nordic")),
+    ("Africa", ("african", "cosafa", "cecafa", "cemac", "comesa", "cabral", "indian ocean")),
+    ("Asia", ("asian", "gulf cup", "arab", "king's cup", "nehru", "bangabandhu")),
+    ("North & Central America", ("concacaf", "uncaf", "caribbean", "n am ch",
+                                 "central american", "windward", "leeward")),
+    ("South America", ("copa",)),
+    ("Oceania", ("oce cup", "oceania", "pacific", "melanesian", "polynesian",
+                 "marianas", "outrigger")),
+    ("World", ("world cup", "wc ", "w cup")),
+)
+
+
+def _alpha_key(name):
+    """Accent-blind sort key, so 'Copa América' files beside 'Copa America'."""
+    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+
+
+def tournament_region(name):
+    """Which dropdown group a competition belongs in."""
+    if name in TOURNAMENT_REGION_OVERRIDES:
+        return TOURNAMENT_REGION_OVERRIDES[name]
+    lowered = name.lower()
+    for region, keywords in TOURNAMENT_REGIONS:
+        if any(k in lowered for k in keywords):
+            return region
+    return "Other"
+
 
 XGB_PARAMS = dict(
     n_estimators=100, max_depth=6, learning_rate=0.1,
@@ -113,8 +169,8 @@ class Model:
     def __init__(self, matches=None):
         self.matches = load_matches() if matches is None else matches
         self.teams = sorted(set(self.matches["home_team"]) | set(self.matches["away_team"]))
-        # Frequency-ordered, not alphabetical: there are ~106 tournaments and a
-        # handful cover most matches, so this is the useful order for a dropdown.
+        # Frequency-ordered because only membership matters here -- _validate
+        # checks against it. The dropdown gets tournament_groups() instead.
         self.tournaments = self.matches["tournament"].value_counts().index.tolist()
         self._fit_xgb()
         self._fit_poisson()
@@ -292,6 +348,24 @@ class Model:
         return [
             "W" if s > c else ("D" if s == c else "L")
             for s, c in zip(scored[::-1], conceded[::-1])
+        ]
+
+    def tournament_groups(self):
+        """Tournaments as <optgroup>s: regions in REGION_ORDER, names A-Z inside.
+
+        The internal `tournaments` list stays frequency-ordered because
+        `_validate` only needs membership, but a 106-entry dropdown is only
+        navigable grouped and sorted.
+        """
+        groups = {}
+        for name in self.tournaments:
+            groups.setdefault(tournament_region(name), []).append(name)
+        rank = {region: i for i, region in enumerate(REGION_ORDER)}
+        return [
+            {"region": region, "tournaments": sorted(names, key=_alpha_key)}
+            for region, names in sorted(
+                groups.items(), key=lambda kv: (rank.get(kv[0], len(rank)), kv[0])
+            )
         ]
 
     def team_list(self, countries=COUNTRIES_CSV):

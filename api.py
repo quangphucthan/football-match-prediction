@@ -33,9 +33,13 @@ class PredictRequest(BaseModel):
 
 @app.get("/api/teams")
 def teams():
-    """Every selectable team, with a colour swatch and its match count."""
+    """Every selectable team, with a colour swatch and its match count.
+
+    Tournaments come grouped by region and sorted, which is the only order a
+    106-entry dropdown is navigable in.
+    """
     model = get_model()
-    return {"teams": model.team_list(), "tournaments": model.tournaments}
+    return {"teams": model.team_list(), "tournaments": model.tournament_groups()}
 
 
 @app.post("/api/predict")

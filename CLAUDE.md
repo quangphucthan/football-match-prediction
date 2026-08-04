@@ -74,6 +74,24 @@ sanity check that matters: Bolivia 2.12, Guatemala 1.67, Ecuador 1.57, Chile
 term (Tonga, 7 home matches, 0.97). `check_home_advantage_is_per_team` in
 `test_model.py` guards the range, the median, and Bolivia's place at the top.
 
+**The competition dropdown is grouped by confederation, not frequency-ordered.**
+106 tournaments is unusable as a flat list. `tournament_region()` in `model.py`
+sorts them into Friendly, World and the six confederations — Friendly first
+because it is the default and a third of the dataset, then World, then the rest
+A–Z, with names A–Z inside each group under an accent-blind key so
+`Copa América` files beside `Copa America`. `/api/teams` returns
+`[{region, tournaments}]` and the client renders `<optgroup>`s.
+
+Classification is keyword-based and **order-sensitive**: cross-confederation
+competitions are matched first so `Afro-Asian Games` is not caught by `asian`,
+and bare `world cup` is matched last so the combined qualifiers group under the
+confederation that actually plays them (`World Cup and African Cup qual` →
+Africa, `WC q and Oce Cup` → Oceania). Five entries are overridden by name
+after checking who actually played in them — `French Territory Cup` runs
+Martinique to Tahiti, `Island Games` Bermuda to Greenland, `Millenium Cup` put
+Bosnia against India. `check_tournament_groups` fails if a new tournament
+matches nothing, which is the cue to classify it rather than ship an "Other".
+
 **λ is capped at 6.0.** Multiplicative Poisson explodes on extreme mismatches
 (Brazil v San Marino solved to 10.6 expected goals). Costs zero measured log loss.
 
