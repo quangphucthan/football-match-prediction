@@ -47,13 +47,7 @@ export default function App() {
 
       <div className="fixture">
         <div className="picks">
-          <TeamPicker
-            id="home"
-            label="Home"
-            value={home}
-            colour={colour(home)}
-            onChange={setHome}
-          />
+          <TeamPicker id="home" label="Home" value={home} teams={teams} onChange={setHome} />
           <button
             className="swap"
             title="Swap home and away"
@@ -65,19 +59,8 @@ export default function App() {
           >
             <i className="fa-solid fa-right-left" aria-hidden="true" />
           </button>
-          <TeamPicker
-            id="away"
-            label="Away"
-            value={away}
-            colour={colour(away)}
-            onChange={setAway}
-          />
+          <TeamPicker id="away" label="Away" value={away} teams={teams} onChange={setAway} />
         </div>
-        <datalist id="teams">
-          {teams.map((t) => (
-            <option value={t.name} key={t.name} />
-          ))}
-        </datalist>
         <div className="opts">
           <i className="fa-solid fa-trophy opt-icon" aria-hidden="true" />
           <select

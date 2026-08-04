@@ -86,6 +86,13 @@ square covering 95% of the mass — lopsided fixtures peak well outside 0–5.
   `useState` plus one `usePrediction` hook covers it. Reach for TanStack Query
   when endpoints pass ~4 or cross-fixture caching starts to matter — not before.
 - **No chart library.** Every visual is CSS: flex bars, a CSS-grid heatmap.
+- **No combobox library either, and no `<datalist>`.** The team picker was
+  `<datalist>`-backed until the popup had to match the field: a datalist's
+  dropdown is drawn by the browser and **cannot be styled at all** — width,
+  position and height are out of CSS's reach, so it renders as a narrow list
+  detached from the input. `TeamPicker.tsx` is ~75 lines of hand-rolled
+  combobox instead: filter, arrow keys, Enter, Escape, click-outside, ARIA
+  roles. Reach for a library only if grouping or multi-select arrives.
 - **Fonts: Roboto + Roboto Mono.** Sans for prose, mono for every number
   (`font-variant-numeric: tabular-nums`). **Icons: Font Awesome**, used only where
   they carry function, never as section decoration.

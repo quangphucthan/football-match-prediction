@@ -77,9 +77,24 @@ body {
 .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
 label.cap { font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint);
             font-family:var(--font-mono); }
+/* position:relative so the options panel can span exactly this box's width. */
 .inputrow { display:flex; align-items:center; gap:9px; background:var(--inset);
-            border:1px solid var(--rule); border-radius:3px; padding:0 10px; }
+            border:1px solid var(--rule); border-radius:3px; padding:0 10px;
+            position:relative; }
 .inputrow:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-bg); }
+
+/* ---- team picker options ---- */
+/* One row's height. The inline max-height multiplies this by VISIBLE_ROWS in
+   TeamPicker.tsx, so the list scrolls after that many teams. */
+.options { --row:33px;
+           position:absolute; top:calc(100% + 5px); left:-1px; right:-1px; z-index:20;
+           margin:0; padding:4px 0; list-style:none; overflow-y:auto; overscroll-behavior:contain;
+           background:var(--panel); border:1px solid var(--rule); border-radius:3px;
+           box-shadow:var(--shadow); }
+.option { display:flex; align-items:center; gap:9px; height:var(--row); padding:0 10px;
+          font-size:14px; color:var(--ink); cursor:pointer; white-space:nowrap; }
+.option[aria-selected="true"] { background:var(--inset); }
+.empty-option { color:var(--ink-faint); cursor:default; font-size:13px; }
 /* Holds either a flag-icons background-image or, when no flag exists for that
    side, the team's colour. 4x3 to match the flag artwork. Bordered so both
    pure-white flags and pure-white fallback colours still read as a box. */
