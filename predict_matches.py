@@ -1,11 +1,14 @@
 """
-Predict football match outcomes using XGBoost and Random Forest.
+Benchmark script: XGBoost and Random Forest on team/tournament identity alone.
+
+This is not what the app serves -- see model.py, which blends a Poisson goal
+model with XGBoost and scores better. Keep this around to document the baseline
+those numbers are measured against.
 """
 
 import pandas as pd
 import numpy as np
 import os
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import LabelEncoder
@@ -28,6 +31,9 @@ def preprocess_data(matches, countries):
     # Also converting the date column to datetime format for easier filtering
     df_matches['date'] = pd.to_datetime(df_matches['date'])
     df_matches = df_matches[df_matches['date'].dt.year >= 2000].copy()
+
+    # Sorted by date so train_models can cut chronologically rather than shuffling.
+    df_matches = df_matches.sort_values('date').reset_index(drop=True)
     
     # Standardize country names in matches dataset using the mapping from countries dataset
     country_map = dict(zip(df_countries['original_name'], df_countries['current_name']))
@@ -45,12 +51,17 @@ def preprocess_data(matches, countries):
     all_teams = pd.concat([df_matches['home_team'], df_matches['away_team']]).unique()
     le_team.fit(all_teams)
 
-    df_matches['home_team_encoded'] = pd.Series(le_team.transform(df_matches['home_team']), index=df_matches.index)
-    df_matches['away_team_encoded'] = pd.Series(le_team.transform(df_matches['away_team']), index=df_matches.index)
-    
+    # np.asarray keeps the type checker happy: LabelEncoder is unannotated, so the
+    # stubs give transform() numpy's very broad ArrayLike -- which admits Buffer and
+    # str -- and pandas rejects that. This narrows it to the ndarray it already is.
+    # The rows were reindexed above, so assigning the array positionally is the same
+    # as the pd.Series(..., index=...) wrapper this replaces.
+    df_matches['home_team_encoded'] = np.asarray(le_team.transform(df_matches['home_team']))
+    df_matches['away_team_encoded'] = np.asarray(le_team.transform(df_matches['away_team']))
+
     # Change tournament name as string to numerical values
     le_tournament = LabelEncoder()
-    df_matches['tournament_encoded'] = pd.Series(le_tournament.fit_transform(df_matches['tournament']), index=df_matches.index)
+    df_matches['tournament_encoded'] = np.asarray(le_tournament.fit_transform(df_matches['tournament']))
     
     # Create features for whether the match was a friendly or played on neutral venue
     df_matches['is_friendly'] = (df_matches['tournament'] == 'Friendly').astype(int)
@@ -71,8 +82,12 @@ def preprocess_data(matches, countries):
     return X, y
 
 def train_models(X, y):
-    # Splitting the data into training and testing sets, with 80% for training and 20% (0.2) for testing
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 42)
+    # Chronological 80/20 cut, not a random shuffle. Forecasting is a forward-in-time
+    # job, so the test set has to sit entirely after the training set -- a shuffled
+    # split lets 2020 matches inform a prediction about a 2004 one.
+    cut = int(len(X) * 0.8)
+    X_train, X_test = X[:cut], X[cut:]
+    y_train, y_test = y[:cut], y[cut:]
     
     # Training Random Forest Classifier
     print("Training Random Forrest Classifier...")
