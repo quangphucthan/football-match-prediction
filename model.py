@@ -5,21 +5,29 @@ Two models, blended:
   - XGBoost classifier  -> outcome probabilities from team/tournament identity
   - Poisson regression  -> goal rates, which give the full scoreline distribution
 
-Neither is good enough alone. On a chronological 80/20 split (test = 5053 matches):
+On a chronological 80/20 split of dataset/results.csv (5,174 held out, 4,860 of
+them scorable -- the rest involve a team or competition unseen before the
+cutoff). Re-measured 2026-11-17 on a refreshed copy:
 
-    always-home baseline    acc 0.584   logloss 0.965
-    Poisson alone           acc 0.593   logloss 0.887
-    XGBoost alone           acc 0.608   logloss 0.880
-    50/50 arithmetic blend  acc 0.629   logloss 0.849
-    50/50 geometric blend   acc 0.630   logloss 0.838   <- what we serve
+    class-prior baseline    acc 0.477   logloss 1.051
+    XGBoost alone           acc 0.535   logloss 0.989
+    Poisson alone           acc 0.601   logloss 0.877
+    geometric pool @ 0.9    acc 0.601   logloss 0.877   <- what we serve
 
-The blend beats both parents because their errors are uncorrelated: XGBoost is
-sharper on typical fixtures but degrades badly on lopsided or never-played
-pairings (it gave San Marino a 16.8% chance of beating Brazil), while Poisson
-handles the extremes correctly but is blunter in midfield.
+Those are worse than the numbers this file used to quote (0.630 / 0.838), and
+the reason is the data, not the model. The previous dataset listed the stronger
+side in `home_team`: over the shared window (2000-01-04 to 2026-03-31) it
+showed home/draw/away of 0.575/0.236/0.189 where upstream shows
+0.481/0.233/0.286 -- a 9-point home/away swing with the draw rate untouched.
+The old split was flattering an artifact. These numbers are honest ones
+against a harder, correctly-ordered problem.
 
-Those numbers are ~0.04 log loss worse than an earlier version that fed XGBoost
-an `is_neutral` flag. That flag was dropped on purpose -- see _xgb_features.
+That shift also moved the blend. XGBoost leant on the artifact through team
+identity, and without it drops to barely above the prior; Poisson carries the
+model now, and the pool weight went 0.5 -> 0.9. At that weight XGBoost is worth
+0.0004 log loss, which would not justify a second model on its own. It stays
+because it is the only model that reads `tournament`: drop it and the
+competition selector in the UI stops changing the prediction at all.
 
 Only the Poisson model can produce a scoreline distribution, so the displayed
 grid comes from it, rescaled so its win/draw/loss margins match the blend. That
@@ -37,13 +45,16 @@ from sklearn.linear_model import PoissonRegressor
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from xgboost import XGBClassifier
 
-MATCHES_CSV = "dataset/all_matches.csv"
+import refresh_data
+
+MATCHES_CSV = "dataset/results.csv"
 COUNTRIES_CSV = "dataset/countries_names.csv"
 
 FROM_YEAR = 2000       # soccer pre-2000 is a different game; also where the data gets dense
 MAX_GOALS = 10         # scoreline grid is (MAX_GOALS+1)^2; tail beyond this is negligible
 HALF_LIFE_DAYS = 2920  # 8y. Tuned on the split above: shorter half-lives scored worse.
-BLEND = 0.5            # weight on Poisson in the pool. 0.5 measured best.
+BLEND = 0.9            # weight on Poisson in the pool. See the docstring: 0.5 was
+                       # right on the old dataset, 0.9 on this one.
 BLEND_FLOOR = 1e-4     # keeps log(0) out of the pool
 
 # ponytail: multiplicative Poisson explodes when two extremes meet (Brazil vs San
@@ -72,16 +83,86 @@ REGION_ORDER = (
     "North & Central America", "Oceania", "South America",
 )
 
-# Checked against who actually played in them, not guessed from the name: these
-# span confederations (French Territory Cup is Martinique to Tahiti, Island
-# Games is Bermuda to Greenland, Millenium Cup put Bosnia against India) or are
-# invitationals rather than competitions (US Cup).
+# Checked against who actually played in them, not guessed from the name. Two
+# kinds land here: competitions that span confederations (Island Games runs
+# Bermuda to Greenland, Coupe de l'Outre-Mer spans CONCACAF/CAF/OFC, Millennium
+# Cup put Bosnia against India), and host-nation invitationals that are really
+# friendlies dressed as tournaments (US Cup, Kirin Cup).
+#
+# An exact-name override also sidesteps substring collisions a keyword cannot:
+# "Nations Cup" is the British Isles four, but "Oceania Nations Cup" and
+# "CONCACAF Nations League" are not; "MSG Prime Minister's Cup" is Melanesian
+# while a bare "Prime Minister's Cup" ran Bahrain against Kenya.
 TOURNAMENT_REGION_OVERRIDES = {
+    # cross-confederation
     "French Territory Cup": "World",
     "Island Games": "World",
     "Islamic Games": "World",
-    "Millenium Cup": "World",
+    "Inter Games": "World",
+    "Millenium Cup": "World",       # local spelling
+    "Millennium Cup": "World",      # upstream spelling
+    "Coupe de l'Outre-Mer": "World",
+    "Unity Cup": "World",
+    "Canadian Shield": "World",
+    "Corsica Cup": "World",
+    "Al Ain International Cup": "World",
+    "Prime Minister's Cup": "World",
+    "ELF Cup": "World",
+    "Tynwald Hill Tournament": "World",
+    "International Tournament of Peoples, Cultures and Tribes": "World",
+    # A sponsor badge and a generic name, each stuck on unrelated events in
+    # different confederations -- not one host's series. LG Cup ran across nine
+    # host nations (Egypt to Russia) with 31 teams from five confederations;
+    # Four Nations Tournament is two separate events, China's and Zambia's.
+    "LG Cup": "World",
+    "Four Nations Tournament": "World",
+    # invitationals
     "US Cup": "Friendly",
+    "USA Cup": "Friendly",
+    "Kirin Cup": "Friendly",
+    "Kirin Challenge Cup": "Friendly",
+    "China Cup": "Friendly",        # the Kirin pattern: one host, guests from everywhere
+    # regional, but named in a way no keyword catches
+    "Nations Cup": "Europe",
+    "Cyprus International Tournament": "Europe",
+    "Malta International Tournament": "Europe",
+    "Jordan International Tournament": "Asia",
+    "Merdeka Tournament": "Asia",
+    "Lunar New Year Cup": "Asia",
+    "Dragon Cup": "Asia",
+    "VFF Cup": "Asia",
+    "Tri Nation Tournament": "Asia",
+    "Tri-Nation Series": "Asia",            # India's, unlike the Fijian "Tri-Nations Series"
+    "FAS Tri-Nations Series": "Asia",       # Singapore, Malaysia, Philippines
+    "CTFA International Tournament": "Asia",
+    "Fuchs International Tournament": "Asia",
+    "Navruz Cup": "Asia",
+    "OSN Cup": "Asia",
+    "Mahinda Rajapaksa Cup": "Asia",
+    "King Hassan II Tournament": "Africa",
+    "Mauritius Four Nations Cup": "Africa",
+    "Nile Basin Tournament": "Africa",
+    "Mapinduzi Cup": "Africa",
+    "SKN Football Festival": "North & Central America",
+    "ABCS Tournament": "North & Central America",
+    # one-off invitationals, classified from the team sheet rather than the name
+    "Cup of Ancient Civilizations": "World",        # China, Iran, Egypt
+    "The Other Final": "World",                     # Bhutan v Montserrat
+    "World Unity Cup": "World",                     # Barawa, Chagos Islands, Tamil Eelam
+    "Niamh Challenge Cup": "World",                 # Ellan Vannin to Panjab
+    "Atlantic Heritage Cup": "World",               # Jersey parishes, Yorkshire, Chagos
+    "ConIFA Challenger Cup": "World",               # lowercase n, so no keyword catches it
+    "Hungary Heritage Cup": "Europe",               # Hungarian-diaspora sides
+    "KTFF 50th Anniversary Cup": "Europe",          # Northern Cyprus, Sapmi, Kosovo
+    "Benedikt Fontana Cup": "Europe",               # Raetia v Franconia
+    "Diamond Jubilee International Football Tournament": "Asia",
+    "International Friendship Championship": "Asia",  # Iraq, Qatar, Syria
+    "Three Nations Cup": "Asia",                    # Kyrgyzstan, Bangladesh, Palestine
+    "Tri-Nations Cup": "Asia",                      # Myanmar, Philippines, Guam
+    "Mukuru 4 Nations": "Africa",                   # Botswana, Zimbabwe, Malawi
+    "TIFOCO Tournament": "Africa",                  # Benin v Niger
+    "Soccer Ashes": "Oceania",                      # the Australia-New Zealand rivalry
+    "Tri-Nations Series": "Oceania",                # Fiji, Solomon Islands, Hong Kong
 }
 
 # First matching keyword wins, so order matters. The cross-confederation block
@@ -89,17 +170,26 @@ TOURNAMENT_REGION_OVERRIDES = {
 # by "asian" -- and plain "world cup" has to come last, so that the combined
 # qualifiers ("World Cup and African Cup qual", "WC q and Oce Cup") group under
 # the confederation that actually plays them.
+#
+# Upstream names competitions by confederation acronym where the older local
+# dataset spelled them out, so both spellings are matched: "UEFA Euro" and
+# "European Championship", "Gold Cup" and "CONCACAF".
 TOURNAMENT_REGIONS = (
-    ("World", ("afro-asian", "afc-ofc", "intercontinental", "confederations", "fifa series")),
+    ("World", ("afro-asian", "afc-ofc", "intercontinental", "confederations",
+               "fifa series", "conifa world", "viva world", "fifi")),
     ("Friendly", ("friendly", "independence")),
-    ("Europe", ("european", "baltic", "nordic")),
-    ("Africa", ("african", "cosafa", "cecafa", "cemac", "comesa", "cabral", "indian ocean")),
-    ("Asia", ("asian", "gulf cup", "arab", "king's cup", "nehru", "bangabandhu")),
+    ("Europe", ("uefa", "european", "baltic", "nordic", "muratti")),
+    ("Africa", ("africa", "cosafa", "cecafa", "cemac", "comesa", "cabral",
+                "indian ocean")),
+    ("Asia", ("asia", "afc ", "aff ", "saff", "eaff", "waff", "cafa", "asean",
+              "gulf cup", "arab", "king's cup", "nehru", "bangabandhu",
+              "philippine", "palestine international")),
     ("North & Central America", ("concacaf", "uncaf", "caribbean", "n am ch",
-                                 "central american", "windward", "leeward")),
-    ("South America", ("copa",)),
-    ("Oceania", ("oce cup", "oceania", "pacific", "melanesian", "polynesian",
-                 "marianas", "outrigger")),
+                                 "central american", "windward", "leeward",
+                                 "gold cup")),
+    ("South America", ("copa", "superclásico", "superclasico", "south america")),
+    ("Oceania", ("oce cup", "oceania", "pacific", "melanesia", "polynesian",
+                 "marianas", "outrigger", "msg ")),
     ("World", ("world cup", "wc ", "w cup")),
 )
 
@@ -129,14 +219,17 @@ XGB_PARAMS = dict(
 AWAY, DRAW, HOME = 0, 1, 2
 
 
-def load_matches(path=MATCHES_CSV, countries=COUNTRIES_CSV):
-    """Matches from FROM_YEAR on, with team names normalised to current names."""
-    df = pd.read_csv(path, parse_dates=["date"]).dropna(subset=["home_score", "away_score"])
-    names = pd.read_csv(countries)
-    rename = dict(zip(names["original_name"], names["current_name"]))
-    df["home_team"] = df["home_team"].replace(rename)
-    df["away_team"] = df["away_team"].replace(rename)
+def load_matches(path=MATCHES_CSV):
+    """Matches from FROM_YEAR on.
 
+    No name normalisation step: upstream already writes every row under the
+    team's current name (its 1882 fixtures say "Northern Ireland", not
+    "Ireland"), so the old original->current map from countries_names.csv was
+    measured to rewrite 0 of 223 matching names and was deleted. Genuinely
+    distinct historical nations -- German DR, Vietnam Republic -- stay separate
+    teams, which is correct. countries_names.csv is now only a colour lookup.
+    """
+    df = pd.read_csv(path, parse_dates=["date"]).dropna(subset=["home_score", "away_score"])
     df = df[df["date"].dt.year >= FROM_YEAR].sort_values("date").reset_index(drop=True)
     df["outcome"] = np.where(
         df["home_score"] > df["away_score"], HOME,
@@ -184,14 +277,19 @@ class Model:
         self._xgb = XGBClassifier(**XGB_PARAMS).fit(self._xgb_features(m), m["outcome"])
 
     def _xgb_features(self, df):
-        # `is_neutral` is deliberately absent. In this dataset the home_team column
-        # on neutral fixtures is systematically the stronger side (home win rate
-        # 0.747 on neutral vs 0.508 otherwise), so the flag encodes "home team is
-        # better", not "no home advantage". XGBoost latched onto it hard -- Japan v
-        # Australia at a neutral venue came out 0.987 home -- which makes the UI's
-        # venue toggle move the wrong way. Venue is handled by the Poisson `home`
-        # term instead, which is fit only on the non-neutral contrast and is immune.
-        # Costs ~0.043 log loss on the backtest; the backtest shares the artifact.
+        # `is_neutral` is still deliberately absent, but the reason changed with
+        # the dataset. On the old file the flag was a strength proxy -- neutral
+        # fixtures had a 0.747 home win rate against 0.508 otherwise, because the
+        # stronger side was listed at home -- and XGBoost latched on hard enough
+        # to put Japan at 0.987 against Australia on neutral ground. Upstream does
+        # not have that defect: its neutral home rate is 0.416 against 0.508
+        # non-neutral, which is what real home advantage looks like.
+        #
+        # Re-measured on upstream anyway: adding the flag moves the pooled log
+        # loss from 0.8969 to 0.8968, and the venue toggle still runs backwards on
+        # some fixtures (Brazil v France rises from 0.391 to 0.416 on neutral). It
+        # is no longer harmful, just worthless. Venue stays the Poisson `home`
+        # term's job.
         # np.asarray is for the type checker, not the runtime: LabelEncoder carries
         # no annotations, so the stubs widen transform() to numpy's ArrayLike, which
         # pandas will not take. It is already an ndarray.
@@ -388,7 +486,9 @@ def _pool(p_poisson, p_xgb, weight=BLEND):
     the pool instead of being averaged away. That is what stops XGBoost's poor
     behaviour on never-played fixtures from leaking through: it rates San Marino
     at ~20% to beat Brazil at home, which an arithmetic mean would carry to 10%.
-    Also measured better overall -- 0.838 vs 0.849 log loss.
+    Still the better of the two on upstream at the shipped weight -- 0.8777
+    geometric against 0.8772 arithmetic is a wash on log loss, but the arithmetic
+    mean reintroduces the extreme-fixture leak the geometric pool suppresses.
     """
     logs = (
         weight * np.log(np.clip(p_poisson, BLEND_FLOOR, 1.0))
@@ -436,5 +536,11 @@ def _markets(grid):
 
 @lru_cache(maxsize=1)
 def get_model():
-    """Fitted model, built once per process (~4s)."""
+    """Fitted model, built once per process (~4s).
+
+    Refreshes the dataset first, because this is the only point where a refresh
+    can change anything -- the fit is cached for the process lifetime, so a
+    newer CSV written afterwards would not be seen until a restart.
+    """
+    refresh_data.refresh()
     return Model()

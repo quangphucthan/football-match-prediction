@@ -77,8 +77,8 @@ def check_home_advantage_is_per_team(m):
     five home matches, and the block spanned 0.54-2.31. Shrinkage is what keeps
     the range defensible while leaving Bolivia's altitude edge intact.
 
-    The 0.8 floor is deliberately below the current worst (Sint Maarten 0.86,
-    nine home matches). Being mildly worse at home is noise in a 237-team tail;
+    The 0.8 floor is deliberately below the current worst (Samoa 0.92, twenty-nine
+    home matches). Being mildly worse at home is noise in a 322-team tail;
     0.54 was not.
     """
     adv = {t: m.home_advantage(t) for t in m.teams}
@@ -120,14 +120,29 @@ def check_tournament_groups(m):
         )
 
     assert groups[0]["region"] == "Friendly", "Friendly is the default, so it goes first"
-    # Spot-checks of the ordering rule that combined qualifiers follow their
-    # confederation rather than the World Cup.
+
     region = {t: g["region"] for g in groups for t in g["tournaments"]}
-    assert region["World Cup"] == "World", region["World Cup"]
-    assert region["Copa America"] == "South America", region["Copa America"]
-    assert region["World Cup and African Cup qual"] == "Africa"
-    assert region["WC q and Oce Cup"] == "Oceania"
-    assert region["Afro-Asian Games"] == "World", "cross-confederation beats the 'asian' keyword"
+    assert region["FIFA World Cup"] == "World", region["FIFA World Cup"]
+    assert region["Copa América"] == "South America", region["Copa América"]
+
+    # Upstream names competitions by acronym, so neither of these carries its
+    # confederation in the text the old keywords looked for.
+    assert region["UEFA Euro qualification"] == "Europe", region["UEFA Euro qualification"]
+    assert region["Gold Cup"] == "North & Central America", region["Gold Cup"]
+
+    # Order-sensitivity: cross-confederation entries are matched before the
+    # continental keywords that would otherwise swallow them.
+    assert region["Afro-Asian Games"] == "World", "cross-confederation beats the 'asia' keyword"
+    assert region["CONIFA World Football Cup"] == "World"
+    assert region["CONIFA Asia Cup"] == "Asia", "continental CONIFA events follow their continent"
+
+    # Substring collisions an exact-name override exists to prevent.
+    assert region["Nations Cup"] == "Europe", "the British Isles four, not a confederation event"
+    assert region["Oceania Nations Cup"] == "Oceania"
+    assert region["Prime Minister's Cup"] == "World", "Bahrain to Kenya"
+    assert region["MSG Prime Minister's Cup"] == "Oceania", "Melanesian Spearhead Group"
+    assert region["Tri-Nation Series"] == "Asia", "India's; one hyphen and an s apart from Fiji's"
+    assert region["Tri-Nations Series"] == "Oceania"
 
 
 def check_input_validation(m):
@@ -174,18 +189,30 @@ def check_markets_math():
 
 
 def check_backtest_not_regressed():
-    """Refit on the first 80% and score the rest. Guards the blend against silent regression.
+    """Refit on the first 80% and score a sample of the rest. Catches gross regression.
 
-    Reference on this split (full test set): blend 0.838, XGBoost alone 0.880,
-    Poisson alone 0.887. The threshold sits below both parents so that dropping
-    either model from the blend fails this check.
+    Measured on the full held-out set (4,860 scored of 5,174): 0.8769 log loss,
+    0.6006 accuracy -- CLAUDE.md's 0.878 / 0.602 reproduced after a data refresh.
+
+    This docstring used to claim the threshold sat below both parents, so that
+    dropping either model would fail. That is no longer true and the numbers it
+    quoted (0.838 / 0.880 / 0.887) were the old dataset's: Poisson alone now
+    scores 0.878, the same as the pool, so no threshold can separate them --
+    XGBoost is worth 0.0004 log loss and is kept for the competition selector,
+    not for accuracy. What 0.93 still catches is a break: XGBoost alone is 0.989.
+
+    1,000 matches rather than all 5,174 keeps this check at ~15s. Bootstrapped
+    over the full set, a 1,000-match subsample's 99% range is 0.839-0.919, so
+    0.93 clears sampling noise. The 400-match sample used before ranged
+    0.808-0.946 against a 0.86 threshold -- it passed in August on the seed, not
+    on the model, and tripped on the next refresh.
     """
     from sklearn.metrics import accuracy_score, log_loss
 
     matches = load_matches()
     cutoff = matches["date"].quantile(0.8)
     train = matches[matches["date"] <= cutoff]
-    test = matches[matches["date"] > cutoff].sample(400, random_state=42)
+    test = matches[matches["date"] > cutoff].sample(1000, random_state=42)
 
     fitted = Model(matches=train.reset_index(drop=True))
     probs, actual = [], []
@@ -200,7 +227,7 @@ def check_backtest_not_regressed():
     ll = log_loss(actual, probs, labels=[0, 1, 2])
     acc = accuracy_score(actual, np.argmax(probs, axis=1))
     print(f"  backtest on {len(actual)} held-out matches: logloss {ll:.4f}  acc {acc:.4f}")
-    assert ll < 0.86, f"blend log loss regressed to {ll:.4f}"
+    assert ll < 0.93, f"blend log loss regressed to {ll:.4f}"
 
 
 def main():
