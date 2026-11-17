@@ -15,6 +15,10 @@ The decisions below are settled — follow them rather than re-deriving.
 - `prototype.html` — approved layout, built by `tools/build_mockup.py` (which
   writes `tools/mockup.html`; copy it over). Regenerating reproduces the
   committed file byte for byte. Port markup/CSS from here.
+- `elo` in `model.py` — `_elo_ratings()` walks the matches in order and hands
+  both models each side's **pre-match** rating. It is the only feature here that
+  must not be computed from the future; `check_elo_is_causal` asserts that
+  directly, because a leak would show up as a large, entirely fake improvement.
 - `predict_matches.py` — benchmark only, not the serving path. Chronological split.
 - `refresh_data.py` — keeps `dataset/results.csv` current against upstream.
   Called by `get_model()`; see Commands for why it is not a cron job.
@@ -24,7 +28,7 @@ The decisions below are settled — follow them rather than re-deriving.
   `web/src/grid.ts` (not the `.tsx`) so `node --test` can run it without a
   framework.
 
-**Next: Elo or rolling-form features** — see Deferred below.
+**Next: venue keyed on city** — see Deferred below. Elo landed 2026-11-17.
 
 ## Locked decisions
 
@@ -41,22 +45,39 @@ written are fixed. **Not re-run:** the `is_neutral` delta (0.8969 → 0.8968) an
 the arithmetic-vs-geometric comparison (0.8772 vs 0.8777). Those are August
 figures; the conclusions they support do not turn on a third decimal place.
 
-**Model — geometric blend, not arithmetic, weighted 0.9 to Poisson.** `_pool()`
+**Model — geometric blend, not arithmetic, weighted 0.8 to Poisson.** `_pool()`
 in `model.py` combines Poisson and XGBoost via a log-opinion pool. An arithmetic
-mean lets XGBoost's bad extreme-fixture behaviour through (San Marino at 10.2%
-to beat Brazil). Measured on a chronological 80/20 split (5,174 held out, of
-which 4,860 are scorable — the rest involve a team or competition unseen before
-the cutoff): pool 0.601 acc / 0.877 log loss, vs Poisson alone 0.601 / 0.877 and
-XGBoost alone 0.535 / 0.989. The baseline — predict the training class prior
-every time, which calls every match a home win — is 0.477 / 1.051.
+mean lets XGBoost's extreme-fixture behaviour through. Measured on a
+chronological 80/20 split (5,174 held out, of which 4,860 are scorable — the
+rest involve a team or competition unseen before the cutoff):
 
-**XGBoost is kept for the competition selector, not for accuracy.** At weight
-0.9 it is worth 0.0004 log loss, which would not justify a second model. It
-stays because it is the only model that reads `tournament` — drop it and the
-competition dropdown stops changing the prediction, which is the failure mode
-the venue rule below exists to prevent. The weight was 0.5 on the old dataset;
-XGBoost leant on the home-ordering artifact and lost most of its value without
-it. If Elo lands and Poisson absorbs `tournament`, reopen this.
+| | without Elo | with Elo |
+|---|---|---|
+| class-prior baseline | 0.477 / 1.051 | 0.477 / 1.051 |
+| XGBoost alone | 0.535 / 0.989 | 0.587 / 0.906 |
+| Poisson alone | 0.601 / 0.877 | 0.601 / 0.874 |
+| geometric pool | 0.601 / 0.877 (w=0.9) | **0.603 / 0.872 (w=0.8)** |
+
+**Elo pays, and it is the first feature here that does.** +0.0048 ± 0.0028 log
+loss on the pool (95% CI, paired over the 4,860 scorable matches, t = 3.4,
+better on 64.4%). Set that against the per-team home-advantage term's +0.0002 ±
+0.0011 before citing either: this one is real, that one is not.
+
+**XGBoost now earns its place on accuracy, which it did not before.** It was
+worth 0.0004 log loss at w=0.9 and was kept only because it is the only model
+that reads `tournament` — drop it and the competition dropdown stops changing
+the prediction. With a rating to read it goes 0.989 → 0.906, and the weight
+sweep puts the optimum at 0.75–0.80 (flat: 0.8711 at both, against 0.8721 at
+0.9). **It ships at 0.8**, the Poisson-leaning end of that flat region, because
+the Poisson is the half that behaves on extreme fixtures.
+
+Elo also repaired two symptoms recorded below as XGBoost's failings. It used to
+put San Marino near 20% against Brazil, the behaviour the geometric pool exists
+to suppress; it now says 0.59%. And the neutral toggle, noted below as running
+backwards on Brazil v France, now moves the right way there (46.8% → 38.7%) and
+on Japan v Australia and England v Germany. **The `is_neutral` decision below
+was not re-opened on the back of that** — it was measured worthless, not
+harmful, and nothing here changes that. Re-measure before touching it.
 
 **`is_neutral` stays out of the XGBoost features — but the reason changed.** On
 the old dataset the flag was a strength proxy (0.747 home win rate on neutral vs
@@ -244,15 +265,16 @@ Virtualenv is `.env/` (not `.venv/`). `.claude/launch.json` holds both servers.
 
 ## Deferred, in priority order
 
-1. **Elo or rolling-form features** — the biggest accuracy win still available,
-   ~20 lines, feeds both models.
+1. ~~Elo or rolling-form features~~ — **done 2026-11-17**, +0.0048 ± 0.0028 log
+   loss. Rolling form (last-N goal difference) is still unexplored and would be
+   the natural second pass if more is wanted from recency.
 2. **Venue — now unblocked one level further than it was.** `results.csv`
    carries both `country` (host nation) and **`city`, populated on every row**
    (49,940 at the last refresh), and no feature uses either. City is not a stadium, but it is where
    the altitude signal actually lives — La Paz, Quito, Mexico City — so a host
    picker keyed on city would move the numbers, not just the label. This is the
-   natural partner to the per-team home-advantage term already in the Poisson.
-   Do it after Elo.
+   natural partner to the per-team home-advantage term already in the Poisson,
+   and now the top of this list.
 
    *Specific stadium* remains blocked: no ground-level column exists upstream,
    and results feeds generally do not carry one. Do not build a stadium dropdown
