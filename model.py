@@ -40,11 +40,32 @@ Elo changes that. Giving XGBoost a strength feature takes it from 0.989 to
 against 0.8721 at 0.9). It ships at 0.8, the Poisson-leaning end of that flat
 region, because the Poisson is the half that behaves on extreme fixtures.
 
-Elo also fixed the two symptoms that made XGBoost untrustworthy. It used to put
-San Marino around 20% against Brazil, which is what the geometric pool exists to
-suppress; with a rating to read it says 0.59%. And the neutral-venue toggle,
-which ran backwards on some fixtures, now moves the right way on Brazil v France
+Elo improved, but did not cure, the two symptoms that made XGBoost
+untrustworthy. It used to put San Marino around 20% against Brazil, which is
+what the geometric pool exists to suppress; with a rating to read it says 0.59%
+in a friendly (0.38% in a World Cup qualifier -- the figure moves with the
+competition, so quote one with its tournament). The neutral-venue toggle, which
+ran backwards on some fixtures, now moves the right way on Brazil v France
 (46.8% -> 38.7%), Japan v Australia and England v Germany.
+
+What is NOT cured: XGBoost's response to elo_diff is non-monotone in the dense
+part of the distribution -- a partial-dependence sweep holding everything else
+fixed has 20 backwards steps in 241, the worst costing 9 points of P(home) for a
+team 10 rating points better. Through the pool that is 22 backwards steps, worst
+-0.0203 at w=0.8 against -0.0102 at w=0.9, so moving the weight doubled how much
+of it reaches the served number. Real fixture ladders stay correctly ordered
+because changing the opponent moves the one-hots too (Brazil at home: France
+0.468, Japan 0.658, Bolivia 0.934, San Marino 0.995), and the aggregate is
+better at 0.8 -- but do not raise XGBoost's weight further without re-checking
+this, and do not describe the extreme-fixture problem as solved.
+
+The serving table also runs outside training support: fitted elo_diff spans
+-796..+757 (p1/p99 -370/+377) while the current ratings admit pairwise gaps up
+to 973, and 5.1% of pickable fixtures sit above the training p99. XGBoost's
+P(home) saturates at 0.980 by elo_diff +470 and is flat beyond, so it cannot
+tell Spain v San Marino from Brazil v San Marino; the Poisson keeps
+extrapolating. That is the live argument for the geometric pool and for BLEND
+sitting at the Poisson-leaning end.
 
 Only the Poisson model can produce a scoreline distribution, so the displayed
 grid comes from it, rescaled so its win/draw/loss margins match the blend. That
@@ -270,8 +291,15 @@ def _elo_ratings(matches):
     them. That is the whole reason this is a sequential loop and not a groupby
     -- it is the one feature here that must not be computed from the future.
 
-    Assumes `matches` is sorted by date, which load_matches guarantees.
+    `Model(matches=...)` is public and bypasses load_matches, so the sort is
+    asserted rather than assumed: a shuffled frame raises nothing, produces
+    plausible-looking ratings, and silently flips the strength ordering of
+    thousands of team pairs. 2000-2008 ratings are additionally weak by cold
+    start -- every team enters the window at ELO_START -- which was measured and
+    deliberately left alone (warm-starting from the pre-2000 rows is worth
+    +0.0007 +/- 0.0020 on the pool, i.e. nothing).
     """
+    assert matches["date"].is_monotonic_increasing, "_elo_ratings needs date-sorted matches"
     rating = {}
     pre_home = np.empty(len(matches))
     pre_away = np.empty(len(matches))
@@ -344,10 +372,14 @@ class Model:
         # non-neutral, which is what real home advantage looks like.
         #
         # Re-measured on upstream anyway: adding the flag moves the pooled log
-        # loss from 0.8969 to 0.8968, and the venue toggle still runs backwards on
-        # some fixtures (Brazil v France rises from 0.391 to 0.416 on neutral). It
-        # is no longer harmful, just worthless. Venue stays the Poisson `home`
-        # term's job.
+        # loss from 0.8969 to 0.8968. It is no longer harmful, just worthless.
+        # Venue stays the Poisson `home` term's job.
+        #
+        # That measurement is from August and predates Elo. The backwards venue
+        # toggle it also cited (Brazil v France rising 0.391 -> 0.416 on neutral)
+        # has since been fixed by Elo -- it now falls 0.468 -> 0.387 -- so that
+        # half of the old argument is gone. The decision stands on the 0.0001
+        # alone, which was never worth a feature. Re-measure before reopening.
         # np.asarray is for the type checker, not the runtime: LabelEncoder carries
         # no annotations, so the stubs widen transform() to numpy's ArrayLike, which
         # pandas will not take. It is already an ndarray.
@@ -557,11 +589,15 @@ def _pool(p_poisson, p_xgb, weight=BLEND):
 
     Chosen over an arithmetic mean because a near-zero from either model survives
     the pool instead of being averaged away. That is what stops XGBoost's poor
-    behaviour on never-played fixtures from leaking through: it rates San Marino
-    at ~20% to beat Brazil at home, which an arithmetic mean would carry to 10%.
-    Still the better of the two on upstream at the shipped weight -- 0.8777
-    geometric against 0.8772 arithmetic is a wash on log loss, but the arithmetic
-    mean reintroduces the extreme-fixture leak the geometric pool suppresses.
+    behaviour on never-played fixtures from leaking through. The ~20% it used to
+    give San Marino against Brazil is now 0.59% in a friendly, because XGBoost
+    reads a rating -- so that figure is no longer the argument for this choice.
+    The argument is the tail: 5.1% of pickable fixtures sit above the training
+    p99 of elo_diff and XGBoost saturates across all of them, while the Poisson
+    keeps extrapolating. See the module docstring.
+
+    The 0.8777-geometric vs 0.8772-arithmetic comparison is an August figure,
+    measured before Elo and not re-run.
     """
     logs = (
         weight * np.log(np.clip(p_poisson, BLEND_FLOOR, 1.0))

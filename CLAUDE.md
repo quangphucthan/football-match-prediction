@@ -71,13 +71,52 @@ sweep puts the optimum at 0.75–0.80 (flat: 0.8711 at both, against 0.8721 at
 0.9). **It ships at 0.8**, the Poisson-leaning end of that flat region, because
 the Poisson is the half that behaves on extreme fixtures.
 
-Elo also repaired two symptoms recorded below as XGBoost's failings. It used to
-put San Marino near 20% against Brazil, the behaviour the geometric pool exists
-to suppress; it now says 0.59%. And the neutral toggle, noted below as running
-backwards on Brazil v France, now moves the right way there (46.8% → 38.7%) and
-on Japan v Australia and England v Germany. **The `is_neutral` decision below
-was not re-opened on the back of that** — it was measured worthless, not
-harmful, and nothing here changes that. Re-measure before touching it.
+Elo improved, but did not cure, two symptoms recorded below as XGBoost's
+failings. It used to put San Marino near 20% against Brazil, the behaviour the
+geometric pool exists to suppress; it now says 0.59% in a friendly — 0.38% in a
+World Cup qualifier, so quote that figure with its competition. And the neutral
+toggle, noted below as running backwards on Brazil v France, now moves the right
+way there (46.8% → 38.7%) and on Japan v Australia and England v Germany. **The
+`is_neutral` decision below was not re-opened on the back of that** — it was
+measured worthless, not harmful, and nothing here changes that. Re-measure
+before touching it.
+
+**Do not describe the extreme-fixture problem as solved, and do not raise
+XGBoost's weight further without re-checking this.** XGBoost's response to
+`elo_diff` is non-monotone in the dense part of the distribution: a
+partial-dependence sweep has 20 backwards steps in 241, the worst costing 9
+points of P(home) to a team 10 rating points *better*. Through the pool that is
+22 backwards steps, worst −0.0203 at w=0.8 against −0.0102 at w=0.9 — moving the
+weight doubled how much of it reaches the served number. Real fixture ladders
+stay correctly ordered because changing the opponent moves the one-hots too, and
+the aggregate is better at 0.8, which is why it ships.
+
+The serving table also runs outside training support: fitted `elo_diff` spans
+−796..+757 (p1/p99 −370/+377) while current ratings admit pairwise gaps to 973,
+and **5.1% of pickable fixtures sit above the training p99**. XGBoost's P(home)
+saturates at 0.980 by +470, so it cannot tell Spain v San Marino from Brazil v
+San Marino; the Poisson keeps extrapolating. That — not the stale 20% figure —
+is the live argument for the geometric pool and the Poisson-leaning weight.
+
+**Two things the test suite could not catch until 2026-11-17, found in review.**
+Both are now asserted, and both were verified by mutation rather than assumed:
+`check_elo_is_causal` tested `_elo_ratings` in isolation while the realistic
+leak is wiring the *final* table into the fit at the call site (it now checks
+`m._elo_home[0] == ELO_START`), and nothing failed when the elo feature was
+unwired from both models entirely — the backtest only drifts 0.872 → 0.877
+against a 0.93 threshold, so `check_elo_reaches_both_models` asserts the wiring
+directly. Related: the median comparison in `check_home_advantage_is_per_team`
+is **structurally blind** to the `coef_[-1]` index it appears to guard, because
+that term cancels in the ratio. A behavioural assert now guards the index and
+runs first, since a column swap otherwise trips the range assert by luck.
+
+Still unmeasured, and the only constants here without a number behind them:
+`ELO_K = 20` (sweeps monotone on log loss to K=40 but accuracy moves the other
+way, all within the CI) and `ELO_HOME = 65` (0/65/100 score 0.8659/0.8666/0.8661
+— 65 is the *worst* of the three, all inside noise). Measure them or delete
+`ELO_HOME` and let the Poisson `home` term own venue, which is the rule stated
+above. `LAMBDA_CAP`'s comment also says to revisit when a strength prior
+arrives; Elo is that prior, and it has not been revisited.
 
 **`is_neutral` stays out of the XGBoost features — but the reason changed.** On
 the old dataset the flag was a strength proxy (0.747 home win rate on neutral vs
