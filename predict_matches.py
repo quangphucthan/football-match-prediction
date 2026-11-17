@@ -133,7 +133,7 @@ def train_models(X, y):
 
 def main():
     print("Initializing...")
-    X, y = preprocess_data('dataset/all_matches.csv', 'dataset/countries_names.csv')
+    X, y = preprocess_data('dataset/results.csv', 'dataset/countries_names.csv')
     train_models(X, y)
     
 if __name__ == "__main__":

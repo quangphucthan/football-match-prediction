@@ -24,18 +24,16 @@ const ALIAS = {
   Brunei: 'bn',
   'Cape Verde': 'cv',
   Congo: 'cg',
-  Czechia: 'cz',
   'DR Congo': 'cd',
-  'East Timor': 'tl',
-  'FS Micronesia': 'fm',
   'Ivory Coast': 'ci',
-  Macao: 'mo',
+  Micronesia: 'fm', // flag-icons lists it as Micronesia, Federated States of
   Palestine: 'ps',
-  'St Vincent & Grenadines': 'vc',
+  'Republic of Ireland': 'ie', // upstream's name; flag-icons lists it as Ireland
   Tahiti: 'pf', // Tahiti competes under French Polynesia
   Turkey: 'tr', // flag-icons lists it as Türkiye
   'United States': 'us',
-  'US Virgin Islands': 'vi',
+  'United States Virgin Islands': 'vi',
+  'Vatican City': 'va',
 }
 
 const norm = (s) =>
@@ -53,12 +51,26 @@ for (const [team, code] of Object.entries(ALIAS)) {
   if (!codes.has(code)) throw new Error(`alias ${team} -> ${code}: no such flag`)
 }
 
-const rows = readFileSync(at('../../dataset/countries_names.csv'), 'utf8').trim().split('\n').slice(1)
+// The roster comes from the match data, not from countries_names.csv -- that file
+// is only a colour lookup now, and covers 229 of the 322 teams upstream fields.
+//
+// Naive comma splitting is safe here and a CSV parser is not worth pulling in:
+// tournament and city do contain commas (so those fields are quoted), but both
+// sit after the three columns read below. The header assert is what keeps that
+// true if upstream ever reorders.
+const FROM_YEAR = 2000 // must match model.py
+const lines = readFileSync(at('../../dataset/results.csv'), 'utf8').trim().split('\n')
+const header = lines[0].split(',').slice(0, 3).join(',')
+if (header !== 'date,home_team,away_team') {
+  throw new Error(`results.csv column order changed: expected date,home_team,away_team, got ${header}`)
+}
+
 const teams = new Set()
-for (const row of rows) {
+for (const row of lines.slice(1)) {
   const cols = row.split(',')
-  if (cols.length !== 3) throw new Error(`expected 3 columns, got ${cols.length}: ${row}`)
+  if (Number(cols[0].slice(0, 4)) < FROM_YEAR) continue
   teams.add(cols[1].trim())
+  teams.add(cols[2].trim())
 }
 
 const flags = {}
