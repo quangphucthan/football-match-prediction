@@ -6,9 +6,11 @@ thing that fails loudly if the prediction maths breaks.
 """
 
 import numpy as np
+import pandas as pd
 
 from model import (
-    MAX_GOALS, Model, _alpha_key, _markets, _outcome_from_grid, _rescale_grid, load_matches,
+    AWAY, DRAW, ELO_START, HOME, MAX_GOALS, Model, _alpha_key, _elo_ratings, _markets,
+    _outcome_from_grid, _rescale_grid, load_matches,
 )
 
 
@@ -55,7 +57,12 @@ def check_expected_goals_are_plausible(m):
 
 
 def check_lopsided_fixtures(m):
-    """XGBoost alone gave San Marino a 16.8% chance of beating Brazil. The blend must not."""
+    """XGBoost alone used to give San Marino ~20% against Brazil. The blend must not.
+
+    Elo cut XGBoost's own figure to 0.59%, so these thresholds now carry 15-20pp
+    of slack and this check no longer discriminates much. It is kept as a floor,
+    not as evidence that the blend is doing the work -- see check_elo_reaches_both_models.
+    """
     strong_home = m.predict("Brazil", "San Marino")["outcome"]
     assert strong_home["home"] > 0.85, f"Brazil at home vs San Marino: {strong_home}"
 
@@ -85,11 +92,28 @@ def check_home_advantage_is_per_team(m):
     values = np.array(list(adv.values()))
     globally = float(np.exp(m._poisson.coef_[-1]))
 
+    # home_advantage() reads coef_[-1] positionally and the elo column sits
+    # immediately before `home`, so a reordering would silently return the wrong
+    # multiplier. Compare it against the ratio the model actually predicts.
+    # 3.8% apart as shipped, 22.6% apart if elo and home are swapped. The
+    # residual is pre-existing: home_advantage() omits the NOT_HOME coefficient.
+    lam_home, _ = m._lambdas("Brazil", "France", False)
+    lam_neutral, _ = m._lambdas("Brazil", "France", True)
+    assert abs(m.home_advantage("Brazil") / (lam_home / lam_neutral) - 1) < 0.06, (
+        f"coef_[-1] is not the `home` column: home_advantage says "
+        f"{m.home_advantage('Brazil'):.3f}, lambdas say {lam_home / lam_neutral:.3f}"
+    )
+
     for team, v in adv.items():
         assert 0.8 <= v <= 2.5, f"{team} home advantage {v:.2f} is out of range"
 
     # Shrinkage pulls the typical team onto the global term. If this drifts, the
     # per-team block has started explaining things the global one should.
+    #
+    # Note what this does NOT check: adv[t] is exp(coef_[-1] + 0.4*coef_team) and
+    # `globally` is exp(coef_[-1]), so coef_[-1] cancels in the comparison and it
+    # is blind to which column that index actually is. The behavioural assert
+    # below is what guards the index.
     assert abs(np.median(values) - globally) < 0.05 * globally, (
         f"median {np.median(values):.2f} should sit on the global term {globally:.2f}"
     )
@@ -177,6 +201,88 @@ def check_history(m):
     assert len(teams) > 200 and all(t["color"].startswith("#") for t in teams)
 
 
+def check_elo_is_causal(m):
+    """The one feature here that must not see the future.
+
+    `_elo_ratings` returns row i's ratings as they stood *before* match i. If
+    that ever slipped to post-match, every backtest would improve and the
+    improvement would be entirely fake, so this is worth asserting directly
+    rather than inferring from a log loss that got better.
+    """
+    beat = pd.DataFrame({
+        "home_team": ["A"] * 4, "away_team": ["B"] * 4,
+        "outcome": [HOME] * 4, "neutral": [False] * 4,
+        "date": pd.to_datetime(["2000-01-01", "2000-02-01", "2000-03-01", "2000-04-01"]),
+    })
+    pre_home, pre_away, final = _elo_ratings(beat)
+
+    assert pre_home[0] == ELO_START and pre_away[0] == ELO_START, (
+        f"the first match must be seen on fresh ratings, got {pre_home[0]}/{pre_away[0]}"
+    )
+    assert (np.diff(pre_home) > 0).all(), "A wins every time, so its pre-match rating must climb"
+    assert pre_home[-1] < final["A"], "the last result must still move the final table"
+    assert abs((final["A"] - ELO_START) + (final["B"] - ELO_START)) < 1e-9, (
+        "Elo is zero-sum: what A gains, B loses"
+    )
+
+    # A draw between equals moves nobody, which is the sign convention holding.
+    level = pd.DataFrame({
+        "home_team": ["C"], "away_team": ["D"], "outcome": [DRAW], "neutral": [True],
+        "date": pd.to_datetime(["2000-01-01"]),
+    })
+    _, _, drawn = _elo_ratings(level)
+    assert abs(drawn["C"] - ELO_START) < 1e-9, f"a neutral draw between equals moved C to {drawn['C']}"
+
+    # And on the real table, the ordering has to be sane.
+    assert m.elo("Brazil") > m.elo("San Marino") + 400, (
+        f"Brazil {m.elo('Brazil'):.0f} vs San Marino {m.elo('San Marino'):.0f}"
+    )
+    assert m.elo("Nowhere Land") == ELO_START, "an unseen team starts at the default"
+
+    # The checks above all test _elo_ratings in isolation, which is not the leak
+    # worth worrying about. The realistic slip is leaving _elo_ratings perfect
+    # and wiring the FINAL table into the fit, which every assert above passes.
+    # Row 0 of the window is Egypt v Togo, 2000-01-04, both teams unseen.
+    assert m._elo_home[0] == ELO_START and m._elo_away[0] == ELO_START, (
+        f"the model must be fit on pre-match ratings, not the final table: "
+        f"got {m._elo_home[0]:.1f}/{m._elo_away[0]:.1f}"
+    )
+
+    # Unsorted input produces plausible ratings and silently flips thousands of
+    # pairwise orderings, so _elo_ratings refuses it rather than assuming.
+    shuffled = beat.iloc[::-1]
+    try:
+        _elo_ratings(shuffled)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("_elo_ratings accepted date-unsorted input")
+
+
+def check_elo_reaches_both_models(m):
+    """The feature can be unwired from either model without any other check failing.
+
+    Zeroing the elo column out of both design matrices leaves _elo_ratings and
+    Model.elo() intact and still passes every behavioural check in this file --
+    the backtest only drifts 0.872 -> 0.877, nowhere near its 0.93 threshold. So
+    the wiring is asserted directly in both models.
+    """
+    gain = m._xgb.get_booster().get_score(importance_type="gain")
+    assert "elo_diff" in gain, f"elo_diff is not reaching XGBoost; features: {sorted(gain)}"
+
+    # Poisson design matrix is [team | opp | home_team | elo | home]. Pinning the
+    # width is also what protects home_advantage(), which reads coef_[-1]: if a
+    # column is ever appended after `home`, this fails before anything silently
+    # reports the wrong number.
+    n_ohe = sum(len(c) for c in m._ohe.categories_)
+    assert m._poisson.coef_.shape[0] == n_ohe + 2, (
+        f"design matrix layout changed: {m._poisson.coef_.shape[0]} coefficients, expected {n_ohe + 2}"
+    )
+    assert abs(m._poisson.coef_[-2]) > 0.1, (
+        f"the elo column is not reaching the Poisson: coefficient {m._poisson.coef_[-2]:.4f}"
+    )
+
+
 def check_markets_math():
     """Hand-checkable: all mass on 2-1 means over 2.5, BTTS, no clean sheets."""
     grid = np.zeros((MAX_GOALS + 1, MAX_GOALS + 1))
@@ -191,21 +297,21 @@ def check_markets_math():
 def check_backtest_not_regressed():
     """Refit on the first 80% and score a sample of the rest. Catches gross regression.
 
-    Measured on the full held-out set (4,860 scored of 5,174): 0.8769 log loss,
-    0.6006 accuracy -- CLAUDE.md's 0.878 / 0.602 reproduced after a data refresh.
+    Measured on the full held-out set (4,860 scored of 5,174) with Elo in both
+    models: pool 0.8711, Poisson alone 0.8741, XGBoost alone 0.9064.
 
     This docstring used to claim the threshold sat below both parents, so that
-    dropping either model would fail. That is no longer true and the numbers it
-    quoted (0.838 / 0.880 / 0.887) were the old dataset's: Poisson alone now
-    scores 0.878, the same as the pool, so no threshold can separate them --
-    XGBoost is worth 0.0004 log loss and is kept for the competition selector,
-    not for accuracy. What 0.93 still catches is a break: XGBoost alone is 0.989.
+    dropping either model would fail. It cannot: bootstrapped over the full set,
+    a 1,000-match subsample of the pool spans 0.8270-0.9143 at 99% while
+    XGBoost alone spans 0.8552-0.9572, and those overlap. 0.93 is therefore a
+    gross-regression guard, not a blend guard -- it clears the pool's own noise
+    by 0.016 and still fails a model that has genuinely broken. The separation
+    job belongs to check_elo_is_causal and check_lopsided_fixtures, which test
+    behaviour rather than an aggregate.
 
-    1,000 matches rather than all 5,174 keeps this check at ~15s. Bootstrapped
-    over the full set, a 1,000-match subsample's 99% range is 0.839-0.919, so
-    0.93 clears sampling noise. The 400-match sample used before ranged
-    0.808-0.946 against a 0.86 threshold -- it passed in August on the seed, not
-    on the model, and tripped on the next refresh.
+    1,000 matches rather than all 5,174 keeps this check at ~15s. The 400-match
+    sample used before ranged 0.808-0.946 against a 0.86 threshold -- it passed
+    in August on the seed, not on the model, and tripped on the next refresh.
     """
     from sklearn.metrics import accuracy_score, log_loss
 
@@ -238,6 +344,7 @@ def main():
         check_expected_goals_are_plausible, check_lopsided_fixtures,
         check_home_advantage, check_home_advantage_is_per_team,
         check_tournament_groups, check_input_validation, check_history,
+        check_elo_is_causal, check_elo_reaches_both_models,
     ]
     for fn in checks:
         fn(m)

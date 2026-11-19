@@ -1,7 +1,7 @@
 """
 Match prediction model for international football.
 
-Two models, blended:
+Two models, blended, both reading an Elo rating built from the same matches:
   - XGBoost classifier  -> outcome probabilities from team/tournament identity
   - Poisson regression  -> goal rates, which give the full scoreline distribution
 
@@ -9,10 +9,17 @@ On a chronological 80/20 split of dataset/results.csv (5,174 held out, 4,860 of
 them scorable -- the rest involve a team or competition unseen before the
 cutoff). Re-measured 2026-11-17 on a refreshed copy:
 
-    class-prior baseline    acc 0.477   logloss 1.051
-    XGBoost alone           acc 0.535   logloss 0.989
-    Poisson alone           acc 0.601   logloss 0.877
-    geometric pool @ 0.9    acc 0.601   logloss 0.877   <- what we serve
+                            without Elo        with Elo
+    class-prior baseline    0.477 / 1.051      0.477 / 1.051
+    XGBoost alone           0.535 / 0.989      0.587 / 0.906
+    Poisson alone           0.601 / 0.877      0.601 / 0.874
+    geometric pool          0.601 / 0.877      0.603 / 0.872   <- what we serve
+                            (at w=0.9)         (at w=0.8)
+
+Elo is worth 0.0048 +/- 0.0028 log loss on the pool (95% CI, paired over the
+4,860 scorable matches, t = 3.4, better on 64.4% of them). That is a real win,
+unlike the per-team home-advantage term, which measured +0.0002 +/- 0.0011 --
+compare the two before citing either.
 
 Those are worse than the numbers this file used to quote (0.630 / 0.838), and
 the reason is the data, not the model. The previous dataset listed the stronger
@@ -22,12 +29,43 @@ showed home/draw/away of 0.575/0.236/0.189 where upstream shows
 The old split was flattering an artifact. These numbers are honest ones
 against a harder, correctly-ordered problem.
 
-That shift also moved the blend. XGBoost leant on the artifact through team
-identity, and without it drops to barely above the prior; Poisson carries the
-model now, and the pool weight went 0.5 -> 0.9. At that weight XGBoost is worth
-0.0004 log loss, which would not justify a second model on its own. It stays
-because it is the only model that reads `tournament`: drop it and the
-competition selector in the UI stops changing the prediction at all.
+The blend weight has moved twice. On the old dataset it was 0.5. After the
+migration XGBoost, having only team identity to go on, dropped to barely above
+the prior and the weight went to 0.9 -- at which point XGBoost was worth 0.0004
+log loss and was kept only because it is the only model that reads
+`tournament`, without which the competition selector stops changing anything.
+
+Elo changes that. Giving XGBoost a strength feature takes it from 0.989 to
+0.906, and the sweep puts the optimum at 0.75-0.80 (flat: 0.8711 at both, 
+against 0.8721 at 0.9). It ships at 0.8, the Poisson-leaning end of that flat
+region, because the Poisson is the half that behaves on extreme fixtures.
+
+Elo improved, but did not cure, the two symptoms that made XGBoost
+untrustworthy. It used to put San Marino around 20% against Brazil, which is
+what the geometric pool exists to suppress; with a rating to read it says 0.59%
+in a friendly (0.38% in a World Cup qualifier -- the figure moves with the
+competition, so quote one with its tournament). The neutral-venue toggle, which
+ran backwards on some fixtures, now moves the right way on Brazil v France
+(46.8% -> 38.7%), Japan v Australia and England v Germany.
+
+What is NOT cured: XGBoost's response to elo_diff is non-monotone in the dense
+part of the distribution -- a partial-dependence sweep holding everything else
+fixed has 20 backwards steps in 241, the worst costing 9 points of P(home) for a
+team 10 rating points better. Through the pool that is 22 backwards steps, worst
+-0.0203 at w=0.8 against -0.0102 at w=0.9, so moving the weight doubled how much
+of it reaches the served number. Real fixture ladders stay correctly ordered
+because changing the opponent moves the one-hots too (Brazil at home: France
+0.468, Japan 0.658, Bolivia 0.934, San Marino 0.995), and the aggregate is
+better at 0.8 -- but do not raise XGBoost's weight further without re-checking
+this, and do not describe the extreme-fixture problem as solved.
+
+The serving table also runs outside training support: fitted elo_diff spans
+-796..+757 (p1/p99 -370/+377) while the current ratings admit pairwise gaps up
+to 973, and 5.1% of pickable fixtures sit above the training p99. XGBoost's
+P(home) saturates at 0.980 by elo_diff +470 and is flat beyond, so it cannot
+tell Spain v San Marino from Brazil v San Marino; the Poisson keeps
+extrapolating. That is the live argument for the geometric pool and for BLEND
+sitting at the Poisson-leaning end.
 
 Only the Poisson model can produce a scoreline distribution, so the displayed
 grid comes from it, rescaled so its win/draw/loss margins match the blend. That
@@ -53,9 +91,16 @@ COUNTRIES_CSV = "dataset/countries_names.csv"
 FROM_YEAR = 2000       # soccer pre-2000 is a different game; also where the data gets dense
 MAX_GOALS = 10         # scoreline grid is (MAX_GOALS+1)^2; tail beyond this is negligible
 HALF_LIFE_DAYS = 2920  # 8y. Tuned on the split above: shorter half-lives scored worse.
-BLEND = 0.9            # weight on Poisson in the pool. See the docstring: 0.5 was
-                       # right on the old dataset, 0.9 on this one.
+BLEND = 0.8            # weight on Poisson in the pool. See the docstring: 0.5 on
+                       # the old dataset, 0.9 after the migration, 0.8 once Elo
+                       # made XGBoost worth listening to again.
 BLEND_FLOOR = 1e-4     # keeps log(0) out of the pool
+
+ELO_START = 1500.0     # every team's rating before its first match in the window
+ELO_K = 20.0           # update step. 20 is the usual international-football value
+ELO_HOME = 65.0        # home edge, in rating points
+ELO_SCALE = 400.0      # points per 10x odds, and the divisor that keeps the
+                       # Poisson's elo column on the same scale as its one-hots
 
 # ponytail: multiplicative Poisson explodes when two extremes meet (Brazil vs San
 # Marino solved to 10.6 expected goals). Capping costs zero measured log loss --
@@ -238,6 +283,42 @@ def load_matches(path=MATCHES_CSV):
     return df
 
 
+def _elo_ratings(matches):
+    """Pre-match Elo for every row, plus the final table.
+
+    Causal by construction: row i records the ratings as they stood *before*
+    match i, so a model fit on these columns cannot see the result that moved
+    them. That is the whole reason this is a sequential loop and not a groupby
+    -- it is the one feature here that must not be computed from the future.
+
+    `Model(matches=...)` is public and bypasses load_matches, so the sort is
+    asserted rather than assumed: a shuffled frame raises nothing, produces
+    plausible-looking ratings, and silently flips the strength ordering of
+    thousands of team pairs. 2000-2008 ratings are additionally weak by cold
+    start -- every team enters the window at ELO_START -- which was measured and
+    deliberately left alone (warm-starting from the pre-2000 rows is worth
+    +0.0007 +/- 0.0020 on the pool, i.e. nothing).
+    """
+    assert matches["date"].is_monotonic_increasing, "_elo_ratings needs date-sorted matches"
+    rating = {}
+    pre_home = np.empty(len(matches))
+    pre_away = np.empty(len(matches))
+    rows = zip(matches["home_team"], matches["away_team"],
+               matches["outcome"], matches["neutral"])
+    for i, (home, away, outcome, neutral) in enumerate(rows):
+        r_home = rating.get(home, ELO_START)
+        r_away = rating.get(away, ELO_START)
+        pre_home[i], pre_away[i] = r_home, r_away
+
+        edge = 0.0 if neutral else ELO_HOME
+        expected = 1.0 / (1.0 + 10.0 ** ((r_away - r_home - edge) / ELO_SCALE))
+        actual = 1.0 if outcome == HOME else 0.5 if outcome == DRAW else 0.0
+        delta = ELO_K * (actual - expected)
+        rating[home] = r_home + delta
+        rating[away] = r_away - delta
+    return pre_home, pre_away, rating
+
+
 def _long_form(df):
     """One row per team per match: what this team scored, against whom, at home or not.
 
@@ -249,11 +330,13 @@ def _long_form(df):
             "team": df["home_team"], "opp": df["away_team"],
             "home": np.where(df["neutral"], 0.0, 1.0),
             "goals": df["home_score"], "date": df["date"],
+            "rating": df["home_elo"], "opp_rating": df["away_elo"],
         }),
         pd.DataFrame({
             "team": df["away_team"], "opp": df["home_team"],
             "home": 0.0,
             "goals": df["away_score"], "date": df["date"],
+            "rating": df["away_elo"], "opp_rating": df["home_elo"],
         }),
     ], ignore_index=True)
 
@@ -265,6 +348,7 @@ class Model:
         # Frequency-ordered because only membership matters here -- _validate
         # checks against it. The dropdown gets tournament_groups() instead.
         self.tournaments = self.matches["tournament"].value_counts().index.tolist()
+        self._elo_home, self._elo_away, self._elo = _elo_ratings(self.matches)
         self._fit_xgb()
         self._fit_poisson()
 
@@ -274,9 +358,11 @@ class Model:
         m = self.matches
         self._team_enc = LabelEncoder().fit(pd.concat([m["home_team"], m["away_team"]]))
         self._trn_enc = LabelEncoder().fit(m["tournament"])
-        self._xgb = XGBClassifier(**XGB_PARAMS).fit(self._xgb_features(m), m["outcome"])
+        self._xgb = XGBClassifier(**XGB_PARAMS).fit(
+            self._xgb_features(m, self._elo_home - self._elo_away), m["outcome"]
+        )
 
-    def _xgb_features(self, df):
+    def _xgb_features(self, df, elo_diff):
         # `is_neutral` is still deliberately absent, but the reason changed with
         # the dataset. On the old file the flag was a strength proxy -- neutral
         # fixtures had a 0.747 home win rate against 0.508 otherwise, because the
@@ -286,10 +372,14 @@ class Model:
         # non-neutral, which is what real home advantage looks like.
         #
         # Re-measured on upstream anyway: adding the flag moves the pooled log
-        # loss from 0.8969 to 0.8968, and the venue toggle still runs backwards on
-        # some fixtures (Brazil v France rises from 0.391 to 0.416 on neutral). It
-        # is no longer harmful, just worthless. Venue stays the Poisson `home`
-        # term's job.
+        # loss from 0.8969 to 0.8968. It is no longer harmful, just worthless.
+        # Venue stays the Poisson `home` term's job.
+        #
+        # That measurement is from August and predates Elo. The backwards venue
+        # toggle it also cited (Brazil v France rising 0.391 -> 0.416 on neutral)
+        # has since been fixed by Elo -- it now falls 0.468 -> 0.387 -- so that
+        # half of the old argument is gone. The decision stands on the 0.0001
+        # alone, which was never worth a feature. Re-measure before reopening.
         # np.asarray is for the type checker, not the runtime: LabelEncoder carries
         # no annotations, so the stubs widen transform() to numpy's ArrayLike, which
         # pandas will not take. It is already an ndarray.
@@ -298,10 +388,13 @@ class Model:
             "away_team": np.asarray(self._team_enc.transform(df["away_team"])),
             "tournament": np.asarray(self._trn_enc.transform(df["tournament"])),
             "is_friendly": (df["tournament"] == "Friendly").astype(int).values,
+            "elo_diff": elo_diff,
         })
 
     def _fit_poisson(self):
-        long = _long_form(self.matches)
+        long = _long_form(self.matches.assign(
+            home_elo=self._elo_home, away_elo=self._elo_away
+        ))
         self._ohe = OneHotEncoder(handle_unknown="ignore")
         X = self._poisson_features(long, fit=True)
         # Recent matches count for more; exponential decay on match age.
@@ -328,8 +421,18 @@ class Model:
         split = len(self._ohe.categories_[0]) + len(self._ohe.categories_[1])
         encoded = encoded.tocsc()
         encoded = sparse.hstack([encoded[:, :split], encoded[:, split:] * HOME_BLOCK_SCALE])
+        # Divided by ELO_SCALE so the column lands on roughly the same scale as
+        # the one-hots: PoissonRegressor applies one alpha to every coefficient,
+        # and a raw +/-400 diff would be penalised into irrelevance.
+        elo = (long["rating"] - long["opp_rating"]).values / ELO_SCALE
+        elo = sparse.csr_matrix(elo.reshape(-1, 1))
+        # `home` stays last: home_advantage() reads coef_[-1].
         home = sparse.csr_matrix(long[["home"]].values.astype(float))
-        return sparse.hstack([encoded, home]).tocsr()
+        return sparse.hstack([encoded, elo, home]).tocsr()
+
+    def elo(self, team):
+        """Current rating: where the team stood after the last match in the window."""
+        return self._elo.get(team, ELO_START)
 
     def home_advantage(self, team):
         """What playing at home multiplies this team's expected goals by.
@@ -350,6 +453,7 @@ class Model:
         rows = _long_form(pd.DataFrame([{
             "home_team": home_team, "away_team": away_team, "neutral": neutral,
             "home_score": 0, "away_score": 0, "date": self.matches["date"].max(),
+            "home_elo": self.elo(home_team), "away_elo": self.elo(away_team),
         }]))
         lam = self._poisson.predict(self._poisson_features(rows))
         return float(min(lam[0], LAMBDA_CAP)), float(min(lam[1], LAMBDA_CAP))
@@ -359,7 +463,8 @@ class Model:
             "home_team": home_team, "away_team": away_team,
             "tournament": tournament, "neutral": neutral,
         }])
-        return self._xgb.predict_proba(self._xgb_features(row))[0]
+        diff = np.array([self.elo(home_team) - self.elo(away_team)])
+        return self._xgb.predict_proba(self._xgb_features(row, diff))[0]
 
     def predict(self, home_team, away_team, neutral=False, tournament="Friendly"):
         self._validate(home_team, away_team, tournament)
@@ -484,11 +589,15 @@ def _pool(p_poisson, p_xgb, weight=BLEND):
 
     Chosen over an arithmetic mean because a near-zero from either model survives
     the pool instead of being averaged away. That is what stops XGBoost's poor
-    behaviour on never-played fixtures from leaking through: it rates San Marino
-    at ~20% to beat Brazil at home, which an arithmetic mean would carry to 10%.
-    Still the better of the two on upstream at the shipped weight -- 0.8777
-    geometric against 0.8772 arithmetic is a wash on log loss, but the arithmetic
-    mean reintroduces the extreme-fixture leak the geometric pool suppresses.
+    behaviour on never-played fixtures from leaking through. The ~20% it used to
+    give San Marino against Brazil is now 0.59% in a friendly, because XGBoost
+    reads a rating -- so that figure is no longer the argument for this choice.
+    The argument is the tail: 5.1% of pickable fixtures sit above the training
+    p99 of elo_diff and XGBoost saturates across all of them, while the Poisson
+    keeps extrapolating. See the module docstring.
+
+    The 0.8777-geometric vs 0.8772-arithmetic comparison is an August figure,
+    measured before Elo and not re-run.
     """
     logs = (
         weight * np.log(np.clip(p_poisson, BLEND_FLOOR, 1.0))
