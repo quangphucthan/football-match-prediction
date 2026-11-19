@@ -11,20 +11,31 @@ guards) is the `measured-changes` skill in `.claude/skills/measured-changes/SKIL
 Eight rules, each one a bug that shipped or nearly shipped here. This file holds the
 decisions and the numbers; that one holds the method.
 
-**Last session handoff — 2026-11-19, covering the dataset migration and Elo:**
+**Session handoffs — look for one at the start of every session, unprompted.** They are
+written to the OS temp directory by `/mattpocock-skills:handoff`, under a new dated
+filename each time, so search for the most recent rather than a fixed path:
 
-```
-/var/folders/50/7vhv27xs0vn7hldw6k9q0xx40000gn/T/football-match-prediction-handoff-2026-11-19.md
+```bash
+find "$TMPDIR" -maxdepth 1 -name 'football-match-prediction-handoff-*.md' | sort -r | head -1
 ```
 
-It records the next task, the failure modes that session hit, and what was deliberately
-left undone. **That is the macOS per-user temp directory, which is purged periodically, so
-a missing file is expected rather than an error** — do not go hunting for it or treat its
-absence as a problem. Everything in it is recoverable from `git log` (commit messages here
-are long and carry the reasoning) plus PRs
+Read it if one comes back. Filenames are ISO-dated, so a reverse sort is newest-first.
+`find` rather than a glob on purpose: zsh aborts a command whose glob matches nothing, so
+`ls .../handoff-*.md` fails noisily when there is no handoff, which is the normal case.
+
+The 2026-11-19 handoff covers the dataset migration and the Elo feature — the next task,
+the failure modes that session hit, and what was deliberately left undone.
+
+**An empty result is expected, not an error.** That directory is purged periodically, so do
+not go hunting, do not treat the absence as a problem, and do not mention it. Everything a
+handoff carries is recoverable from `git log` (commit messages here are long and carry the
+reasoning) plus PRs
 [#2](https://github.com/quangphucthan/football-match-prediction/pull/2) and
-[#3](https://github.com/quangphucthan/football-match-prediction/pull/3). If you write a new
-handoff, update this path — or better, drop it in the repo so it stops rotting.
+[#3](https://github.com/quangphucthan/football-match-prediction/pull/3).
+
+If you write a new handoff, leave it where that command will find it — same directory, same
+`football-match-prediction-handoff-<ISO date>.md` shape. Then there is no path here to go
+stale.
 
 ## Agreed plan
 
