@@ -3,10 +3,36 @@
 Predict international football fixtures: pick two national teams, get outcome
 probabilities, expected goals and a scoreline distribution.
 
+## Start here
+
+**Working rules — read before changing model maths, constants or tests.** The method this
+project holds itself to (how to measure a change, how to write a guard that actually
+guards) is the `measured-changes` skill in `.claude/skills/measured-changes/SKILL.md`.
+Eight rules, each one a bug that shipped or nearly shipped here. This file holds the
+decisions and the numbers; that one holds the method.
+
+**Last session handoff — 2026-11-19, covering the dataset migration and Elo:**
+
+```
+/var/folders/50/7vhv27xs0vn7hldw6k9q0xx40000gn/T/football-match-prediction-handoff-2026-11-19.md
+```
+
+It records the next task, the failure modes that session hit, and what was deliberately
+left undone. **That is the macOS per-user temp directory, which is purged periodically, so
+a missing file is expected rather than an error** — do not go hunting for it or treat its
+absence as a problem. Everything in it is recoverable from `git log` (commit messages here
+are long and carry the reasoning) plus PRs
+[#2](https://github.com/quangphucthan/football-match-prediction/pull/2) and
+[#3](https://github.com/quangphucthan/football-match-prediction/pull/3). If you write a new
+handoff, update this path — or better, drop it in the repo so it stops rotting.
+
 ## Agreed plan
 
-Full plan: `~/.claude/plans/let-s-develop-a-front-end-streamed-spark.md`.
-The decisions below are settled — follow them rather than re-deriving.
+The long-form plan this file used to point at
+(`~/.claude/plans/let-s-develop-a-front-end-streamed-spark.md`) **no longer exists on this
+machine** — confirmed 2026-11-19. Everything load-bearing from it was folded into this
+file, so treat this file as the plan of record. The decisions below are settled — follow
+them rather than re-deriving.
 
 **Done**
 - `model.py` — the served model. `get_model().predict(home, away, neutral, tournament)` returns the whole API payload.
